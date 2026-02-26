@@ -6,7 +6,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from core.defaults import (
     default_academic_year, default_rotations,
     default_rotator_programs, default_residents,
@@ -208,19 +207,8 @@ with tab_gantt:
         st.info("No assignments for selected residents.")
     else:
         df_g = pd.DataFrame(gantt_rows)
-        fig_gantt = px.timeline(
-            df_g.assign(
-                Start=pd.to_datetime(df_g["Start"].astype(str), format="%W", errors="coerce"),
-            ),
-            x_start="Start",
-            x_end="End",
-            y="Resident",
-            color="Rotation",
-            color_discrete_map={rot.name: rot.color for rot in rotations},
-            title=f"Rotation Timeline — {gantt_limit} residents",
-        )
 
-        # Use week numbers instead of dates for clarity
+        # Gantt chart using week numbers on the x-axis
         fig_gantt2 = go.Figure()
         for _, row in df_g.iterrows():
             fig_gantt2.add_trace(go.Bar(
