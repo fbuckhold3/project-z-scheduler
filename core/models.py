@@ -92,6 +92,7 @@ class RotatorProgram:
     total_rotators: int           # # of rotators in the program per year
     months_inpatient: int         # months each rotator spends on IP
     eligible_rotation_ids: list   # which of our rotations they may fill
+    slot_level: str = "intern"    # "intern" or "senior" — which pool they fill
     max_simultaneous: int = 1     # max rotators at once
     blackout_months: list = field(default_factory=list)  # e.g. [6] = June
     notes: str = ""

@@ -243,36 +243,40 @@ def default_rotator_programs() -> list[RotatorProgram]:
             total_rotators=6,
             months_inpatient=4,         # 4 months total per year across all 6
             eligible_rotation_ids=["SLUH", "VA", "MICU"],
+            slot_level="intern",        # fills intern-level slots
             max_simultaneous=1,
             blackout_months=[6],        # block June
-            notes="6 neurology residents rotate through SLUH, VA, MICU. Block out June.",
+            notes="6 neurology residents rotate through SLUH, VA, MICU. Fill intern slots. Block out June.",
         ),
         RotatorProgram(
             specialty="Emergency Medicine",
             total_rotators=8,
             months_inpatient=1,         # 1 month MICU each
             eligible_rotation_ids=["MICU"],
+            slot_level="intern",        # fills intern-level slots
             max_simultaneous=1,
             blackout_months=[],
-            notes="8 EM residents, 1 month MICU each. Stagger August through spring. Only 1 at a time.",
+            notes="8 EM residents, 1 month MICU each. Fill intern slots. Stagger August through spring. Only 1 at a time.",
         ),
         RotatorProgram(
             specialty="Anesthesia",
             total_rotators=10,
             months_inpatient=2,         # 2 months each: 1 MICU + 1 SLUH
             eligible_rotation_ids=["MICU", "SLUH"],
+            slot_level="intern",        # fills intern-level slots
             max_simultaneous=1,
             blackout_months=[],
-            notes="10 anesthesia residents, 2 months each (1 MICU + 1 SLUH). Max 1 per rotation at a time.",
+            notes="10 anesthesia residents, 2 months each (1 MICU + 1 SLUH). Fill intern slots. Max 1 per rotation at a time.",
         ),
         RotatorProgram(
             specialty="Psychiatry",
             total_rotators=8,
             months_inpatient=1,         # 1 month VA each
             eligible_rotation_ids=["VA"],
+            slot_level="intern",        # fills intern-level slots
             max_simultaneous=1,
             blackout_months=[6],        # block June
-            notes="8 psychiatry residents, 1 month VA each. Only 1 at a time. Block June.",
+            notes="8 psychiatry residents, 1 month VA each. Fill intern slots. Only 1 at a time. Block June.",
         ),
     ]
 

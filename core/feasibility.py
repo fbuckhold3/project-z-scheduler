@@ -118,12 +118,13 @@ def check_feasibility(
         # Simple even split for now (refined allocation can be done in solver)
         weeks_per_rot = total_weeks / n_eligible
 
-        # Determine if rotators are senior-level or intern-level
-        # All rotators are treated as "senior-equivalent" for slot-filling purposes
+        # Route credit to the correct pool based on slot_level
         for rot_id in prog.eligible_rotation_ids:
             sc, ic = rotator_credit.get(rot_id, (0.0, 0.0))
-            # Rotators fill senior slots preferentially
-            rotator_credit[rot_id] = (sc + weeks_per_rot, ic)
+            if prog.slot_level == "intern":
+                rotator_credit[rot_id] = (sc, ic + weeks_per_rot)
+            else:
+                rotator_credit[rot_id] = (sc + weeks_per_rot, ic)
 
         rotator_summary.append({
             "specialty": prog.specialty,
@@ -131,6 +132,7 @@ def check_feasibility(
             "months_each": prog.months_inpatient,
             "total_weeks": round(total_weeks, 1),
             "rotations": ", ".join(prog.eligible_rotation_ids),
+            "slot_level": prog.slot_level,
             "max_simultaneous": prog.max_simultaneous,
         })
 
