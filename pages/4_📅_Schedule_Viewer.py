@@ -1,0 +1,422 @@
+"""
+pages/4_Schedule_Viewer.py
+Interactive schedule grid, Gantt chart, and per-resident timeline.
+"""
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from core.defaults import (
+    default_academic_year, default_rotations,
+    default_rotator_programs, default_residents,
+)
+
+st.set_page_config(page_title="Schedule Viewer", page_icon="📅", layout="wide")
+
+if "rotations" not in st.session_state:
+    st.session_state.rotations          = default_rotations()
+    st.session_state.residents          = default_residents()
+    st.session_state.rotator_programs   = default_rotator_programs()
+    st.session_state.academic_year      = default_academic_year()
+    st.session_state.schedule           = None
+    st.session_state.feasibility        = None
+    st.session_state.solve_result       = None
+
+st.title("📅 Schedule Viewer")
+
+if st.session_state.schedule is None:
+    st.warning("No schedule built yet. Go to **🔧 Schedule Builder** first.")
+    st.stop()
+
+schedule  = st.session_state.schedule
+residents = st.session_state.residents
+rotations = st.session_state.rotations
+ay        = schedule.academic_year
+
+rot_map   = {r.rotation_id: r for r in rotations}
+res_map   = {r.resident_id: r for r in residents}
+
+# Color maps
+color_map: dict[str, str] = {r.rotation_id: r.color for r in rotations}
+color_map["VACATION"] = "#374151"
+color_map["OP"]       = color_map.get("OP", "#86EFAC")
+
+# ---------------------------------------------------------------------------
+# Filters
+# ---------------------------------------------------------------------------
+st.markdown("---")
+col_f1, col_f2, col_f3 = st.columns(3)
+
+with col_f1:
+    pgy_filter = st.multiselect(
+        "Filter by PGY year", options=[1, 2, 3], default=[1, 2, 3]
+    )
+with col_f2:
+    type_filter = st.multiselect(
+        "Filter by resident type",
+        options=["categorical", "preliminary"],
+        default=["categorical", "preliminary"],
+    )
+with col_f3:
+    week_range = st.slider(
+        "Week range", min_value=1, max_value=ay.total_weeks,
+        value=(1, min(24, ay.total_weeks)), step=1,
+    )
+
+filtered_res = [
+    r for r in residents
+    if r.pgy_year in pgy_filter and r.resident_type in type_filter
+]
+
+# ---------------------------------------------------------------------------
+# Tab layout
+# ---------------------------------------------------------------------------
+tab_grid, tab_gantt, tab_resident, tab_weekly = st.tabs([
+    "🗂️ Grid View",
+    "📊 Gantt Chart",
+    "👤 Resident Timeline",
+    "📈 Weekly Counts",
+])
+
+
+# ===========================================================================
+# GRID VIEW (residents × weeks heatmap)
+# ===========================================================================
+with tab_grid:
+    st.subheader("Schedule Grid")
+    st.caption("Color-coded by rotation. Hover for details.")
+
+    weeks_shown = list(range(week_range[0], week_range[1] + 1))
+
+    if not filtered_res:
+        st.info("No residents match the current filters.")
+        st.stop()
+
+    # Build matrix
+    z_text  = []   # abbreviation labels
+    z_color = []   # numeric index for colorscale
+
+    rot_ids_ordered = [r.rotation_id for r in rotations] + ["VACATION", "OP", ""]
+    rot_id_to_num   = {rid: i for i, rid in enumerate(rot_ids_ordered)}
+
+    for res in filtered_res:
+        row_text  = []
+        row_color = []
+        for w in weeks_shown:
+            if ay.is_blackout(w):
+                row_text.append("—")
+                row_color.append(rot_id_to_num.get("VACATION", 0))
+            else:
+                a = schedule.get_resident_week(res.resident_id, w)
+                if a:
+                    rot = rot_map.get(a.rotation_id)
+                    row_text.append(rot.abbrev if rot else a.rotation_id)
+                    row_color.append(rot_id_to_num.get(a.rotation_id, len(rot_ids_ordered) - 1))
+                else:
+                    row_text.append("")
+                    row_color.append(len(rot_ids_ordered) - 1)
+        z_text.append(row_text)
+        z_color.append(row_color)
+
+    # Build custom colorscale from rotation colors
+    n = len(rot_ids_ordered)
+    colorscale = []
+    for i, rid in enumerate(rot_ids_ordered):
+        c = color_map.get(rid, "#CBD5E1")
+        frac = i / max(n - 1, 1)
+        colorscale.append([frac, c])
+
+    fig_hm = go.Figure(go.Heatmap(
+        z=z_color,
+        text=z_text,
+        texttemplate="%{text}",
+        textfont={"size": 9, "color": "white"},
+        x=[f"W{w:02d}" for w in weeks_shown],
+        y=[f"{r.name[:20]} (PGY{r.pgy_year})" for r in filtered_res],
+        colorscale=colorscale,
+        showscale=False,
+        hoverongaps=False,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Week %{x}<br>"
+            "Rotation: %{text}<extra></extra>"
+        ),
+    ))
+
+    row_height = max(12, min(20, 600 // max(len(filtered_res), 1)))
+    total_height = max(300, row_height * len(filtered_res) + 80)
+
+    fig_hm.update_layout(
+        height=total_height,
+        xaxis_title="Week",
+        yaxis_title="Resident",
+        plot_bgcolor="white",
+        margin=dict(l=180, r=10, t=40, b=60),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
+        yaxis=dict(tickfont=dict(size=9)),
+    )
+
+    st.plotly_chart(fig_hm, use_container_width=True)
+
+    # Legend
+    st.markdown("**Legend:**")
+    leg_cols = st.columns(min(len(rotations), 8))
+    for i, rot in enumerate(rotations):
+        with leg_cols[i % len(leg_cols)]:
+            st.markdown(
+                f'<div style="background:{rot.color};border-radius:4px;padding:3px 6px;'
+                f'text-align:center;font-size:11px;color:white;margin:2px">'
+                f'{rot.abbrev}</div>',
+                unsafe_allow_html=True,
+            )
+
+
+# ===========================================================================
+# GANTT CHART
+# ===========================================================================
+with tab_gantt:
+    st.subheader("Gantt Chart")
+    st.caption("Rotation blocks per resident. Sorted by PGY year then name.")
+
+    gantt_limit = st.slider(
+        "Max residents shown", min_value=10, max_value=len(filtered_res),
+        value=min(40, len(filtered_res)), step=5,
+    )
+
+    gantt_res = filtered_res[:gantt_limit]
+    gantt_res_ids = {r.resident_id for r in gantt_res}
+
+    gantt_rows = []
+    for a in schedule.assignments:
+        if a.resident_id not in gantt_res_ids:
+            continue
+        res = res_map.get(a.resident_id)
+        rot = rot_map.get(a.rotation_id)
+        if not res or not rot:
+            continue
+        gantt_rows.append({
+            "Resident":   f"{res.name} (PGY{res.pgy_year})",
+            "Rotation":   rot.name,
+            "Start":      a.start_week,
+            "End":        a.end_week + 1,
+            "Color":      rot.color,
+            "Abbrev":     rot.abbrev,
+        })
+
+    if not gantt_rows:
+        st.info("No assignments for selected residents.")
+    else:
+        df_g = pd.DataFrame(gantt_rows)
+        fig_gantt = px.timeline(
+            df_g.assign(
+                Start=pd.to_datetime(df_g["Start"].astype(str), format="%W", errors="coerce"),
+            ),
+            x_start="Start",
+            x_end="End",
+            y="Resident",
+            color="Rotation",
+            color_discrete_map={rot.name: rot.color for rot in rotations},
+            title=f"Rotation Timeline — {gantt_limit} residents",
+        )
+
+        # Use week numbers instead of dates for clarity
+        fig_gantt2 = go.Figure()
+        for _, row in df_g.iterrows():
+            fig_gantt2.add_trace(go.Bar(
+                x=[row["End"] - row["Start"]],
+                y=[row["Resident"]],
+                base=[row["Start"]],
+                orientation="h",
+                marker_color=row["Color"],
+                text=row["Abbrev"],
+                textposition="inside",
+                insidetextanchor="middle",
+                hovertemplate=f"<b>{row['Resident']}</b><br>{row['Rotation']}<br>"
+                              f"Weeks {row['Start']}–{row['End']-1}<extra></extra>",
+                showlegend=False,
+            ))
+
+        # Add legend traces
+        shown_rots = df_g["Rotation"].unique()
+        for rot in rotations:
+            if rot.name in shown_rots:
+                fig_gantt2.add_trace(go.Bar(
+                    x=[0], y=[""],
+                    marker_color=rot.color,
+                    name=rot.name,
+                    showlegend=True,
+                    orientation="h",
+                ))
+
+        fig_gantt2.update_layout(
+            barmode="overlay",
+            height=max(400, 16 * gantt_limit + 100),
+            xaxis_title="Week",
+            yaxis_title="",
+            plot_bgcolor="white",
+            legend=dict(orientation="h", y=1.05, x=0),
+            margin=dict(l=200, r=20, t=60, b=40),
+            xaxis=dict(range=[week_range[0], week_range[1] + 1]),
+        )
+        st.plotly_chart(fig_gantt2, use_container_width=True)
+
+
+# ===========================================================================
+# RESIDENT TIMELINE
+# ===========================================================================
+with tab_resident:
+    st.subheader("Individual Resident Timeline")
+
+    res_names = {r.resident_id: f"{r.name} (PGY{r.pgy_year})" for r in residents}
+    selected_rid = st.selectbox(
+        "Select resident",
+        options=[r.resident_id for r in residents],
+        format_func=lambda rid: res_names[rid],
+    )
+
+    res = res_map[selected_rid]
+    st.markdown(f"**{res.name}** | PGY{res.pgy_year} | {res.resident_type.title()}")
+
+    # Build rotation sequence
+    seq = []
+    for w in ay.all_weeks(include_blackout=True):
+        if ay.is_blackout(w):
+            seq.append({"Week": w, "Rotation": "VACATION", "Abbrev": "—", "Color": "#374151"})
+        else:
+            a = schedule.get_resident_week(res.resident_id, w)
+            if a:
+                rot = rot_map.get(a.rotation_id)
+                seq.append({
+                    "Week": w,
+                    "Rotation": rot.name if rot else a.rotation_id,
+                    "Abbrev": rot.abbrev if rot else a.rotation_id,
+                    "Color": rot.color if rot else "#CBD5E1",
+                })
+            else:
+                seq.append({"Week": w, "Rotation": "Unassigned", "Abbrev": "?", "Color": "#E2E8F0"})
+
+    df_seq = pd.DataFrame(seq)
+
+    # Horizontal bar for each rotation block
+    fig_res = go.Figure()
+    block_start = None
+    block_rot = None
+    block_color = None
+
+    def add_block(fig, s, e, rot_name, color, res_name):
+        fig.add_trace(go.Bar(
+            x=[e - s + 1],
+            y=[res_name],
+            base=[s],
+            orientation="h",
+            marker_color=color,
+            text=f"{rot_name[:4]}",
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(size=9, color="white"),
+            hovertemplate=f"<b>{rot_name}</b><br>Weeks {s}–{e}<extra></extra>",
+            showlegend=False,
+        ))
+
+    prev_rot = None
+    prev_color = None
+    bs = 1
+    for _, row in df_seq.iterrows():
+        if row["Rotation"] != prev_rot:
+            if prev_rot is not None:
+                add_block(fig_res, bs, row["Week"] - 1, prev_rot, prev_color, res.name)
+            prev_rot = row["Rotation"]
+            prev_color = row["Color"]
+            bs = row["Week"]
+    if prev_rot:
+        add_block(fig_res, bs, ay.total_weeks, prev_rot, prev_color, res.name)
+
+    fig_res.update_layout(
+        barmode="overlay",
+        height=120,
+        xaxis_title="Week",
+        yaxis_title="",
+        plot_bgcolor="white",
+        showlegend=False,
+        margin=dict(l=20, r=20, t=20, b=40),
+        xaxis=dict(range=[0.5, ay.total_weeks + 0.5], dtick=4),
+    )
+    st.plotly_chart(fig_res, use_container_width=True)
+
+    # Summary table for this resident
+    rotation_counts = df_seq[df_seq["Rotation"] != "VACATION"]["Rotation"].value_counts().reset_index()
+    rotation_counts.columns = ["Rotation", "Weeks"]
+    ip_rots = {r.rotation_id for r in rotations if r.rot_type.value == "Inpatient"}
+    ip_weeks = df_seq[df_seq["Abbrev"].isin([rot_map.get(rid, type("R", (), {"abbrev": rid})).abbrev
+                                              for rid in ip_rots])].shape[0]
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("IP Weeks", ip_weeks)
+    col_b.metric("Clinic Weeks", df_seq[df_seq["Rotation"].str.contains("Clinic")].shape[0])
+    col_c.metric("OP/Elective Weeks", df_seq[df_seq["Abbrev"] == "OP"].shape[0])
+
+    st.dataframe(rotation_counts, use_container_width=True, hide_index=True)
+
+
+# ===========================================================================
+# WEEKLY COUNTS
+# ===========================================================================
+with tab_weekly:
+    st.subheader("Weekly Rotation Headcounts")
+    st.caption("How many residents are on each rotation per week.")
+
+    active_weeks = ay.all_weeks(include_blackout=False)
+    weekly_data = []
+    for w in active_weeks:
+        row = {"Week": w}
+        week_assigns = schedule.get_week_assignments(w)
+        for rot in rotations:
+            row[rot.abbrev] = sum(1 for a in week_assigns if a.rotation_id == rot.rotation_id)
+        weekly_data.append(row)
+
+    df_wk = pd.DataFrame(weekly_data).set_index("Week")
+
+    # Stacked bar chart
+    fig_wk = go.Figure()
+    for rot in rotations:
+        if rot.abbrev in df_wk.columns and df_wk[rot.abbrev].sum() > 0:
+            fig_wk.add_trace(go.Bar(
+                name=rot.abbrev,
+                x=df_wk.index,
+                y=df_wk[rot.abbrev],
+                marker_color=rot.color,
+            ))
+
+    fig_wk.update_layout(
+        barmode="stack",
+        title="Residents per Rotation per Week",
+        height=420,
+        plot_bgcolor="white",
+        legend=dict(orientation="h", y=1.08),
+        xaxis_title="Week",
+        yaxis_title="# Residents",
+    )
+    st.plotly_chart(fig_wk, use_container_width=True)
+
+    # Also show capacity compliance — how close are we to targets?
+    st.markdown("**Capacity Compliance**")
+    compliance_rows = []
+    for rot in rotations:
+        if not rot.active or rot.senior_capacity + rot.intern_capacity == 0:
+            continue
+        target = rot.senior_capacity + rot.intern_capacity
+        actuals = df_wk.get(rot.abbrev, pd.Series(dtype=int)).values
+        actuals = actuals[actuals > 0]
+        if len(actuals) == 0:
+            continue
+        compliance_rows.append({
+            "Rotation":   rot.name,
+            "Target/wk":  target,
+            "Avg actual": f"{actuals.mean():.1f}",
+            "Min actual": int(actuals.min()),
+            "Max actual": int(actuals.max()),
+            "Under-staffed wks": int((actuals < target).sum()),
+            "Over-staffed wks":  int((actuals > target).sum()),
+        })
+    st.dataframe(pd.DataFrame(compliance_rows), use_container_width=True, hide_index=True)
