@@ -134,7 +134,10 @@ def mk_floor(group_idx: int, abs_day: int, floors: list,
         n_completed_off = complete_cycles + 1
     else:
         n_completed_off = complete_cycles
-    return floors[n_completed_off % len(floors)]
+    # Add group_idx as an initial phase offset so all 5 groups start on DIFFERENT
+    # floors from day 1.  Without this every group converges on the same floor
+    # after cycling through their first off-period (all within the first 10 days).
+    return floors[(n_completed_off + group_idx) % len(floors)]
 
 
 def mk_off_group(abs_day: int, n_teams: int = 5,
