@@ -20,6 +20,7 @@ from core.daily import (
 from core.defaults import (
     default_academic_year, default_rotations,
     default_rotator_programs, default_residents,
+    default_all_residents,
 )
 
 st.set_page_config(page_title="Daily Schedule", page_icon="📆", layout="wide")
@@ -51,7 +52,7 @@ td.wk-sep { border-left: 2px solid #6B7280 !important; }
 # ── Session state guard ───────────────────────────────────────────────────────
 if "rotations" not in st.session_state:
     st.session_state.rotations        = default_rotations()
-    st.session_state.residents        = default_residents()
+    st.session_state.residents        = default_all_residents()
     st.session_state.rotator_programs = default_rotator_programs()
     st.session_state.academic_year    = default_academic_year()
     st.session_state.schedule         = None
@@ -292,9 +293,15 @@ with tab_team:
             "#FEE2E2","#DCFCE7","#EDE9FE","#FEF9C3","#DBEAFE",
         ]
         for g in groups:
-            g_active = [rid for rid in g.resident_ids if rid in active_rids]
+            # Collect every resident assigned to this group in the view window.
+            # Uses the per-week mk_group_map: (rot_id, res_id, week) -> group_idx.
+            g_rids_in_range: set = set()
+            for _w in range(week_start, week_end + 1):
+                for rid in active_rids:
+                    if ds.mk_group_map.get((rot_id, rid, _w)) == g.group_idx:
+                        g_rids_in_range.add(rid)
             member_names = ", ".join(
-                res_map[rid].name for rid in g_active if rid in res_map
+                res_map[rid].name for rid in sorted(g_rids_in_range) if rid in res_map
             ) or "—"
             bg = team_colors[g.group_idx % len(team_colors)]
 
@@ -375,9 +382,8 @@ with tab_team:
 # =============================================================================
 with tab_cov:
     st.caption(
-        "Daily headcounts vs rotation capacity. "
-        "Solid bar = program residents · striped bar = rotator credit · "
-        "red dashed = full capacity target."
+        "Daily headcounts vs rotation capacity (rotator residents are included in bars). "
+        "Red dashed line = full capacity target."
     )
 
     day_start = (week_start - 1) * 7
@@ -389,23 +395,9 @@ with tab_cov:
         for dn in DAY_NAMES:
             x_labels.append(f"W{w} {dn}")
 
-    # --- Rotator weekly credit per rotation ----------------------------------
-    # Rotators don't produce Assignment objects, so we compute their average
-    # weekly slot contribution from the rotator_programs config.
+    # Rotators are now modelled as named residents with actual Assignment objects;
+    # ds.coverage already reflects their presence — no separate credit needed.
     rotator_programs = st.session_state.get("rotator_programs", [])
-    rotator_credit_sr: dict[str, float] = {}   # rot_id -> avg sr slots/week
-    rotator_credit_int: dict[str, float] = {}  # rot_id -> avg int slots/week
-    active_week_count = max(ay.total_weeks - len(ay.blackout_weeks), 1)
-    for prog in rotator_programs:
-        total_weeks_prog = prog.total_rotators * prog.months_inpatient * (48 / 12)
-        n_elig = max(len(prog.eligible_rotation_ids), 1)
-        wk_per_rot = total_weeks_prog / n_elig
-        for rot_id in prog.eligible_rotation_ids:
-            avg_per_week = wk_per_rot / active_week_count
-            if prog.slot_level == "intern":
-                rotator_credit_int[rot_id] = rotator_credit_int.get(rot_id, 0) + avg_per_week
-            else:
-                rotator_credit_sr[rot_id] = rotator_credit_sr.get(rot_id, 0) + avg_per_week
 
     active_rots = [
         r for r in rotations
@@ -431,26 +423,14 @@ with tab_cov:
                 y = [counts[d] if d < len(counts) else 0
                      for d in range(day_start, day_end)]
                 target = rot.senior_capacity + rot.intern_capacity
-                # Rotator credit (constant across all days for now)
-                rot_credit = rotator_credit_sr.get(rid, 0) + rotator_credit_int.get(rid, 0)
-                y_rot = [round(rot_credit, 2)] * len(y)
 
                 fig = go.Figure()
                 fig.add_bar(
                     x=x_labels, y=y,
                     marker_color=rot.color,
-                    name="Program residents",
-                    hovertemplate="%{x}<br>%{y} program residents<extra></extra>",
+                    name="Residents on rotation",
+                    hovertemplate="%{x}<br>%{y} residents<extra></extra>",
                 )
-                if rot_credit > 0.05:
-                    fig.add_bar(
-                        x=x_labels, y=y_rot,
-                        marker_color="#A7F3D0",
-                        marker_pattern_shape="/",
-                        name=f"Rotator credit (~{rot_credit:.1f}/wk)",
-                        hovertemplate="%{x}<br>~%{y:.1f} rotator slots<extra></extra>",
-                    )
-                    fig.update_layout(barmode="stack")
                 if target > 0:
                     fig.add_hline(
                         y=target, line_dash="dash", line_color="#EF4444",
@@ -461,8 +441,7 @@ with tab_cov:
                     title=rot.name,
                     height=240,
                     margin=dict(l=30, r=10, t=35, b=40),
-                    showlegend=rot_credit > 0.05,
-                    legend=dict(orientation="h", y=-0.35, font=dict(size=9)),
+                    showlegend=False,
                     xaxis=dict(tickangle=45, tickfont=dict(size=8)),
                     yaxis=dict(title="# on", rangemode="tozero"),
                     plot_bgcolor="white",
@@ -488,8 +467,9 @@ with tab_cov:
             })
         st.dataframe(pd.DataFrame(rot_rows), use_container_width=True, hide_index=True)
         st.caption(
-            "ℹ️ Rotators fill slots within their eligible rotations but are not yet "
-            "modelled as named individuals — they appear as credit in the stacked bars above."
+            "ℹ️ Rotators are now modelled as named individuals (neuro1–6, em1–8, "
+            "anes1–10, psy1–8) with pre-scheduled Assignment blocks. "
+            "Their presence is counted directly in the coverage bars above."
         )
 
 

@@ -108,10 +108,19 @@ class GreedySolver:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def solve(self) -> SolveResult:
+    def solve(self, pre_assigned: list = None) -> SolveResult:
+        """
+        pre_assigned: optional list of Assignment objects to inject before
+        the greedy solver runs.  Used to pin rotator schedules so the solver
+        treats those slots as already filled.
+        """
         t0 = time.time()
 
         active_weeks = self.ay.all_weeks(include_blackout=False)
+
+        # Step 0: inject pre-assigned rotator blocks
+        if pre_assigned:
+            self._inject_assignments(pre_assigned)
 
         # Step 1: blackout → vacation placeholder
         for w in self.ay.blackout_weeks:
@@ -155,6 +164,25 @@ class GreedySolver:
         )
 
     # ------------------------------------------------------------------
+    # Pre-inject fixed assignments (rotators)
+    # ------------------------------------------------------------------
+
+    def _inject_assignments(self, assignments: list):
+        """
+        Write pre-scheduled assignments (e.g. rotator blocks) into the grid
+        before the greedy solver runs.  Blackout weeks are handled in Step 1
+        and will overwrite these if they coincide (unlikely with well-formed
+        rotator schedules, but safe either way).
+        """
+        for a in assignments:
+            for w in range(a.start_week, a.end_week + 1):
+                if w in self.grid:
+                    self.grid[w][a.resident_id] = a.rotation_id
+                    if a.rotation_id in self.weekly_slots[w]:
+                        if a.resident_id not in self.weekly_slots[w][a.rotation_id]:
+                            self.weekly_slots[w][a.rotation_id].append(a.resident_id)
+
+    # ------------------------------------------------------------------
     # ABABA (MICU + Bronze)
     # ------------------------------------------------------------------
 
@@ -171,8 +199,11 @@ class GreedySolver:
         if not micu and not bronze:
             return
 
-        seniors = [r for r in self.residents if r.is_senior]
-        interns  = [r for r in self.residents if not r.is_senior]
+        # Rotators have pre-injected assignments; exclude from ABABA greedy fill
+        seniors = [r for r in self.residents if r.is_senior
+                   and r.resident_type != "rotator"]
+        interns  = [r for r in self.residents if not r.is_senior
+                    and r.resident_type != "rotator"]
 
         # How many senior "streams" are needed per week?
         # MICU: 4 seniors/week, Bronze: 2 seniors/week → 6 streams
@@ -312,8 +343,11 @@ class GreedySolver:
         if not nf or not nf.active:
             return
 
-        seniors = [r for r in self.residents if r.is_senior]
-        interns  = [r for r in self.residents if not r.is_senior]
+        # Rotators do not do NF
+        seniors = [r for r in self.residents if r.is_senior
+                   and r.resident_type != "rotator"]
+        interns  = [r for r in self.residents if not r.is_senior
+                    and r.resident_type != "rotator"]
 
         senior_cap = nf.senior_capacity  # 4 seniors per NF block
         intern_cap  = nf.intern_capacity   # 3 interns per NF block
@@ -425,6 +459,7 @@ class GreedySolver:
         for cycle in cycles:
             if not cycle:
                 continue
+            # Rotators do not attend continuity clinic
             # Assign each resident to one week in this cycle for clinic
             # Sort residents to distribute: PGY3 first, then PGY2, then interns
             unassigned = [
@@ -435,6 +470,8 @@ class GreedySolver:
             # Actually: find residents who don't have clinic this cycle yet
             needs_clinic = []
             for res in self.residents:
+                if res.resident_type == "rotator":
+                    continue
                 has_clinic = any(
                     self.grid[w].get(res.resident_id) == "Clinic"
                     for w in cycle
@@ -559,9 +596,11 @@ class GreedySolver:
     # ------------------------------------------------------------------
 
     def _fill_op(self, active_weeks: list[int]):
-        """Assign 'OP' to any resident-week not yet filled."""
+        """Assign 'OP' to any non-rotator resident-week not yet filled."""
         for w in active_weeks:
             for res in self.residents:
+                if res.resident_type == "rotator":
+                    continue   # rotators are absent from our schedule on non-rotation weeks
                 if self.grid[w].get(res.resident_id) is None:
                     self.grid[w][res.resident_id] = "OP"
                     self.weekly_slots[w]["OP"].append(res.resident_id)
@@ -613,6 +652,10 @@ class GreedySolver:
         active = self.ay.all_weeks(include_blackout=False)
 
         for res in self.residents:
+            # Rotators follow their own external schedule; skip IM constraint checks
+            if res.resident_type == "rotator":
+                continue
+
             # --- Max 3 IP in any 6-week window ---
             for start in active:
                 window = [w for w in range(start, start + 6) if w in active]

@@ -10,6 +10,16 @@ per-day assignment grid, accounting for:
   - Standard IP     : 7 consecutive working days (MICU, Bronze, Gold, Cards)
   - OP / Clinic     : Mon–Fri only
   - Jeopardy        : available all 7 days
+
+MK GROUP ASSIGNMENT — PER-WEEK APPROACH
+  Group assignment is computed per-week based on who is simultaneously
+  on the rotation during that week, not across the whole year.  This
+  ensures no group ever has more than its composition limit of interns/seniors
+  even when large pools cycle through a rotation over the year.
+
+  Seniors:  positions 0-1 → Mario, 2 → Luigi, 3 → Peach, 4 → Yoshi, 5 → Bowser
+  Interns:  positions 0-1 → Luigi, 2-3 → Peach, 4-5 → Yoshi, 6-7 → Bowser
+  (SLUH; VA proportions differ — see MK_GROUP_COMPOSITION)
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -65,7 +75,6 @@ class MKGroup:
     rotation_id: str
     group_idx: int
     team_name: str
-    resident_ids: list          # all residents who spend ANY time in this group
     floors: list                # floor rotation for this rotation
 
 
@@ -97,8 +106,8 @@ class DailySchedule:
     stats: dict                 # resident_id -> ResidentStats
     total_days: int
     mk_days_off: int            # stored for UI display
-    # Quick lookup: resident_id -> group_idx for each MK rotation
-    mk_group_map: dict = field(default_factory=dict)  # (rot_id, res_id) -> group_idx
+    # (rot_id, res_id, week) -> group_idx  — per-week group assignment
+    mk_group_map: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +138,6 @@ def mk_floor(group_idx: int, abs_day: int, floors: list,
     complete_cycles = abs_day // cycle
     pos_in_cycle    = abs_day % cycle
     # Count completed off-periods for this group up to (not including) abs_day.
-    # An off-period is "completed" once we're past its end inside the current cycle.
     if pos_in_cycle >= off_start + days_off_per_turn:
         n_completed_off = complete_cycles + 1
     else:
@@ -144,6 +152,32 @@ def mk_off_group(abs_day: int, n_teams: int = 5,
                  days_off_per_turn: int = 2) -> int:
     """Return which group index is off on abs_day."""
     return (abs_day // days_off_per_turn) % n_teams
+
+
+# ---------------------------------------------------------------------------
+# Per-week group assignment helper
+# ---------------------------------------------------------------------------
+
+def _group_from_sorted_position(pos: int, composition: list[tuple[int, int]],
+                                 is_senior: bool) -> int:
+    """
+    Given a resident's 0-indexed position in the sorted same-level cohort
+    for a specific week, return which MK group they belong to.
+
+    composition: list of (n_seniors, n_interns) per group index.
+    Positions wrap (modulo) if the cohort exceeds one full cycle.
+    """
+    per_group = [c[0] if is_senior else c[1] for c in composition]
+    cyc = sum(per_group)
+    if cyc == 0:
+        return 0
+    pos_in_cyc = pos % cyc
+    cs = 0
+    for g, cnt in enumerate(per_group):
+        cs += cnt
+        if pos_in_cyc < cs:
+            return g
+    return len(composition) - 1
 
 
 # ---------------------------------------------------------------------------
@@ -227,95 +261,92 @@ def build_daily_schedule(
     }
 
     # =========================================================================
-    # 1. MK ROTATIONS — year-wide group assignment
+    # 1. MK ROTATIONS — per-week group assignment
     # =========================================================================
     mk_rot_ids = [
         r.rotation_id for r in rotations
         if r.pattern == RotationPattern.MK and r.active
     ]
 
-    # For each MK rotation, find every resident who touches it during the year
-    mk_all_residents: dict[str, list[str]] = {}  # rot_id -> sorted list of res_ids
+    # Pre-compute per-week sorted lists (seniors and interns separately)
+    # for each MK rotation.  Only residents with an assignment on that
+    # rotation in that week appear in the list.
+    mk_weekly_seniors: dict[str, dict[int, list[str]]] = {
+        rid: defaultdict(list) for rid in mk_rot_ids
+    }
+    mk_weekly_interns: dict[str, dict[int, list[str]]] = {
+        rid: defaultdict(list) for rid in mk_rot_ids
+    }
+    for a in schedule.assignments:
+        if a.rotation_id not in mk_rot_ids:
+            continue
+        res = res_map.get(a.resident_id)
+        if res is None:
+            continue
+        for w in range(a.start_week, a.end_week + 1):
+            if res.is_senior:
+                mk_weekly_seniors[a.rotation_id][w].append(a.resident_id)
+            else:
+                mk_weekly_interns[a.rotation_id][w].append(a.resident_id)
+
+    # Sort each week's list for a consistent, deterministic ordering
     for rot_id in mk_rot_ids:
-        rids = sorted({a.resident_id for a in schedule.assignments
-                       if a.rotation_id == rot_id})
-        mk_all_residents[rot_id] = rids
+        for w in mk_weekly_seniors[rot_id]:
+            mk_weekly_seniors[rot_id][w] = sorted(set(mk_weekly_seniors[rot_id][w]))
+        for w in mk_weekly_interns[rot_id]:
+            mk_weekly_interns[rot_id][w] = sorted(set(mk_weekly_interns[rot_id][w]))
 
-    # ---------- Level-aware MK group assignment ----------------------------------
-    # Seniors and interns are distributed across groups following MK_GROUP_COMPOSITION.
-    # For SLUH: Mario (g=0) gets 2 seniors, each other group gets 1 senior + 2 interns.
-    # For VA  : every group gets 1 senior + 1 intern.
-
-    def _mk_group_assign(rot_id_: str, rids_: list) -> dict[str, int]:
-        composition = MK_GROUP_COMPOSITION.get(rot_id_)
-        n = DEFAULT_MK_N_TEAMS
-        if not composition:
-            return {rid: i % n for i, rid in enumerate(sorted(rids_))}
-        srs  = sorted([r for r in rids_ if res_map.get(r) and res_map[r].is_senior])
-        ints = sorted([r for r in rids_ if res_map.get(r) and not res_map[r].is_senior])
-        sr_per  = [c[0] for c in composition]
-        int_per = [c[1] for c in composition]
-        sr_cyc  = sum(sr_per)
-        int_cyc = sum(int_per)
-        gmap: dict[str, int] = {}
-        for i, rid in enumerate(srs):
-            pos, cs = (i % sr_cyc if sr_cyc else 0), 0
-            for g, cnt in enumerate(sr_per):
-                cs += cnt
-                if pos < cs:
-                    gmap[rid] = g; break
-        for i, rid in enumerate(ints):
-            if not int_cyc:
-                gmap[rid] = 0; continue
-            pos, cs = i % int_cyc, 0
-            for g, cnt in enumerate(int_per):
-                cs += cnt
-                if pos < cs:
-                    gmap[rid] = g; break
-        for rid in rids_:
-            if rid not in gmap:
-                gmap[rid] = len(gmap) % n
-        return gmap
-
-    mk_group_map: dict[str, dict[str, int]] = {}   # rot_id -> {res_id -> group_idx}
+    # Build abstract MKGroup objects (no resident_ids — computed per-week now)
     mk_groups_out: dict[str, list[MKGroup]] = {}
-
     for rot_id in mk_rot_ids:
-        rids = mk_all_residents.get(rot_id, [])
-        n_teams = DEFAULT_MK_N_TEAMS
+        n_teams    = DEFAULT_MK_N_TEAMS
         team_names = MK_TEAM_NAMES.get(rot_id, [f"T{i}" for i in range(n_teams)])
-        floors     = MK_FLOORS.get(rot_id,     [f"F{i}" for i in range(n_teams - 1)])
+        floors     = MK_FLOORS.get(rot_id, [f"F{i}" for i in range(n_teams - 1)])
+        mk_groups_out[rot_id] = [
+            MKGroup(rotation_id=rot_id, group_idx=g,
+                    team_name=team_names[g], floors=floors)
+            for g in range(n_teams)
+        ]
 
-        group_map: dict[str, int] = _mk_group_assign(rot_id, rids)
-        mk_group_map[rot_id] = group_map
-
-        # Build MKGroup objects (one per group index)
-        groups: list[MKGroup] = []
-        for g in range(n_teams):
-            g_rids = [rid for rid, gi in group_map.items() if gi == g]
-            groups.append(MKGroup(
-                rotation_id=rot_id,
-                group_idx=g,
-                team_name=team_names[g],
-                resident_ids=g_rids,
-                floors=floors,
-            ))
-        mk_groups_out[rot_id] = groups
+    # Flat group map: (rot_id, res_id, week) → group_idx
+    # Populated as we write DayEntries below.
+    flat_group_map: dict[tuple, int] = {}
 
     # Write MK day entries for every assignment
     for a in schedule.assignments:
         rot = rot_map.get(a.rotation_id)
         if rot is None or rot.pattern != RotationPattern.MK:
             continue
-        group_map = mk_group_map.get(a.rotation_id, {})
-        team_names = MK_TEAM_NAMES.get(a.rotation_id, [f"T{i}" for i in range(5)])
-        floors     = MK_FLOORS.get(a.rotation_id,     [f"F{i}" for i in range(4)])
-        n_teams    = DEFAULT_MK_N_TEAMS
 
-        group_idx = group_map.get(a.resident_id, 0)
-        tname     = team_names[group_idx] if group_idx < len(team_names) else f"T{group_idx}"
+        composition = MK_GROUP_COMPOSITION.get(a.rotation_id)
+        team_names  = MK_TEAM_NAMES.get(a.rotation_id, [f"T{i}" for i in range(5)])
+        floors      = MK_FLOORS.get(a.rotation_id, [f"F{i}" for i in range(4)])
+        n_teams     = DEFAULT_MK_N_TEAMS
+        res         = res_map.get(a.resident_id)
+        if res is None:
+            continue
 
         for w in range(a.start_week, a.end_week + 1):
+            # Determine this resident's group for this specific week
+            if composition:
+                if res.is_senior:
+                    peers = mk_weekly_seniors[a.rotation_id][w]
+                else:
+                    peers = mk_weekly_interns[a.rotation_id][w]
+                pos = peers.index(a.resident_id) if a.resident_id in peers else 0
+                group_idx = _group_from_sorted_position(pos, composition, res.is_senior)
+            else:
+                # Fallback: simple round-robin
+                all_rids = sorted(
+                    mk_weekly_seniors[a.rotation_id][w] +
+                    mk_weekly_interns[a.rotation_id][w]
+                )
+                pos = all_rids.index(a.resident_id) if a.resident_id in all_rids else 0
+                group_idx = pos % n_teams
+
+            flat_group_map[(a.rotation_id, a.resident_id, w)] = group_idx
+            tname = team_names[group_idx] if group_idx < len(team_names) else f"T{group_idx}"
+
             w_day0 = (w - 1) * 7
             for d in range(7):
                 abs_d = w_day0 + d
@@ -323,7 +354,7 @@ def build_daily_schedule(
                     break
                 working = mk_is_working(group_idx, abs_d, n_teams, mk_days_off)
                 if working:
-                    floor = mk_floor(group_idx, abs_d, floors, n_teams, mk_days_off)
+                    floor  = mk_floor(group_idx, abs_d, floors, n_teams, mk_days_off)
                     assign = floor
                 else:
                     assign = "Off"
@@ -337,7 +368,6 @@ def build_daily_schedule(
     # =========================================================================
     # 2. NF ROTATIONS — block-level rotation, split by level
     # =========================================================================
-    # Group NF assignments by (start_week, end_week) and level
     nf_blocks_senior: dict[tuple, list[str]] = defaultdict(list)
     nf_blocks_intern: dict[tuple, list[str]] = defaultdict(list)
 
@@ -428,9 +458,7 @@ def build_daily_schedule(
                     assign  = "Jeopardy"
                 else:
                     # Standard IP (Gold, Cards, MICU, Bronze, ABABA IP weeks)
-                    # Apply MICU stagger: stagger_day=0 → Sun start, =1 → Mon start
                     if a.stagger_day == 1 and d == 0:
-                        # This resident starts Monday; skip Sunday (d=6 of prev week handled elsewhere)
                         working = False
                         assign  = "Pre-start"
                     else:
@@ -475,12 +503,6 @@ def build_daily_schedule(
                 consec = 0
         stats[rid] = s
 
-    # Flatten mk_group_map for DailySchedule
-    flat_group_map: dict[tuple, int] = {}
-    for rot_id, gmap in mk_group_map.items():
-        for res_id, gi in gmap.items():
-            flat_group_map[(rot_id, res_id)] = gi
-
     return DailySchedule(
         resident_daily=resident_daily,
         mk_groups=mk_groups_out,
@@ -502,31 +524,26 @@ def mk_week_roster(
     rot_id: str,
     week: int,           # 1-indexed
     residents: list[Resident],
+    schedule: Schedule,
     n_teams: int = 5,
 ) -> dict[str, list]:
     """
-    Return {team_name: [resident_ids_working_that_week_on_that_team]}.
-    Used by the UI to show "who is on which team this week".
+    Return {team_name: [resident_ids_working_on_that_team_this_week]}.
+    Uses the per-week mk_group_map for accurate group membership.
     """
     team_names = MK_TEAM_NAMES.get(rot_id, [f"T{i}" for i in range(n_teams)])
-    res_map    = {r.resident_id: r for r in residents}
-    day0       = (week - 1) * 7
-
     roster: dict[str, list] = {t: [] for t in team_names}
 
-    for r in residents:
-        rid = r.resident_id
-        # Check if resident has any working day on this rotation this week
-        for d in range(7):
-            abs_d = day0 + d
-            if abs_d >= daily_sched.total_days:
-                break
-            entry = daily_sched.resident_daily[rid][abs_d]
-            if entry.rotation_id == rot_id and entry.working:
-                gi = daily_sched.mk_group_map.get((rot_id, rid), 0)
-                tname = team_names[gi] if gi < len(team_names) else f"T{gi}"
-                if rid not in roster[tname]:
-                    roster[tname].append(rid)
-                break  # counted once per week
+    # Find all residents assigned to this rotation this week
+    active_rids = {
+        a.resident_id for a in schedule.assignments
+        if a.rotation_id == rot_id and a.start_week <= week <= a.end_week
+    }
+
+    for rid in active_rids:
+        gi = daily_sched.mk_group_map.get((rot_id, rid, week), 0)
+        tname = team_names[gi] if gi < len(team_names) else f"T{gi}"
+        if rid not in roster[tname]:
+            roster[tname].append(rid)
 
     return roster

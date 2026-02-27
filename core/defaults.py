@@ -6,7 +6,7 @@ These are the starting values shown in Configuration; everything is editable in 
 from __future__ import annotations
 from .models import (
     Rotation, RotationType, RotationPattern,
-    RotatorProgram, Resident, ResidentLevel, AcademicYear,
+    RotatorProgram, Resident, ResidentLevel, AcademicYear, Assignment,
 )
 
 
@@ -233,7 +233,7 @@ def default_rotations() -> list[Rotation]:
 
 
 # ---------------------------------------------------------------------------
-# Default Rotator Programs
+# Default Rotator Programs (aggregate config, kept for reference/UI)
 # ---------------------------------------------------------------------------
 
 def default_rotator_programs() -> list[RotatorProgram]:
@@ -241,56 +241,179 @@ def default_rotator_programs() -> list[RotatorProgram]:
         RotatorProgram(
             specialty="Neurology",
             total_rotators=6,
-            months_inpatient=4,         # 4 months total per year across all 6
+            months_inpatient=4,
             eligible_rotation_ids=["SLUH", "VA", "MICU"],
-            slot_level="intern",        # fills intern-level slots
+            slot_level="intern",
             max_simultaneous=1,
-            blackout_months=[6],        # block June
-            notes="6 neurology residents rotate through SLUH, VA, MICU. Fill intern slots. Block out June.",
+            blackout_months=[6],
+            notes="6 neurology residents. 4 months IP each across SLUH/VA/MICU. Block June.",
         ),
         RotatorProgram(
             specialty="Emergency Medicine",
             total_rotators=8,
-            months_inpatient=1,         # 1 month MICU each
+            months_inpatient=1,
             eligible_rotation_ids=["MICU"],
-            slot_level="intern",        # fills intern-level slots
+            slot_level="intern",
             max_simultaneous=1,
             blackout_months=[],
-            notes="8 EM residents, 1 month MICU each. Fill intern slots. Stagger August through spring. Only 1 at a time.",
+            notes="8 EM residents, 1 month MICU each. Only 1 at a time.",
         ),
         RotatorProgram(
             specialty="Anesthesia",
             total_rotators=10,
-            months_inpatient=2,         # 2 months each: 1 MICU + 1 SLUH
+            months_inpatient=2,
             eligible_rotation_ids=["MICU", "SLUH"],
-            slot_level="intern",        # fills intern-level slots
+            slot_level="intern",
             max_simultaneous=1,
             blackout_months=[],
-            notes="10 anesthesia residents, 2 months each (1 MICU + 1 SLUH). Fill intern slots. Max 1 per rotation at a time.",
+            notes="10 anesthesia residents, 2 months each (1 MICU + 1 SLUH). Max 1 per rotation.",
         ),
         RotatorProgram(
             specialty="Psychiatry",
             total_rotators=8,
-            months_inpatient=1,         # 1 month VA each
+            months_inpatient=1,
             eligible_rotation_ids=["VA"],
-            slot_level="intern",        # fills intern-level slots
+            slot_level="intern",
             max_simultaneous=1,
-            blackout_months=[6],        # block June
-            notes="8 psychiatry residents, 1 month VA each. Fill intern slots. Only 1 at a time. Block June.",
+            blackout_months=[6],
+            notes="8 psychiatry residents, 1 month VA each. Only 1 at a time. Block June.",
         ),
     ]
 
 
 # ---------------------------------------------------------------------------
-# Default Resident Roster (placeholder — 55 seniors + 31 interns)
+# Named rotator residents
+# ---------------------------------------------------------------------------
+
+def default_rotator_residents() -> list[Resident]:
+    """
+    Named residents from external training programs that rotate through
+    our IP services.  Uses pgy_year=1 so they fill intern-level slots
+    on MK teams (Luigi/Peach/Yoshi/Bowser) and MICU intern positions.
+
+    Naming convention matches the reference spreadsheet:
+      neuro1–neuro6, em1–em8, anes1–anes10, psy1–psy8
+    """
+    rotators = []
+    specs = [
+        # (prefix, count, long_name)
+        ("neuro", 6,  "Neurology"),
+        ("em",    8,  "Emergency Medicine"),
+        ("anes",  10, "Anesthesia"),
+        ("psy",   8,  "Psychiatry"),
+    ]
+    for prefix, count, long_name in specs:
+        for i in range(1, count + 1):
+            rotators.append(Resident(
+                resident_id=f"{prefix}{i}",
+                name=f"{long_name} {i}",
+                pgy_year=1,          # fills intern-level slots
+                resident_type="rotator",
+                notes=f"{long_name} rotator — monthly IP blocks",
+            ))
+    return rotators
+
+
+# ---------------------------------------------------------------------------
+# Rotator pre-scheduling
+# ---------------------------------------------------------------------------
+
+def _find_block(start: int, n: int, blackouts: set, max_w: int) -> tuple[int, int] | None:
+    """
+    Find the first window of n consecutive weeks with no blackouts,
+    starting at or after 'start'.  Returns (first_week, last_week) or None.
+    """
+    w = start
+    while w + n - 1 <= max_w:
+        if not any(x in blackouts for x in range(w, w + n)):
+            return (w, w + n - 1)
+        w += 1
+    return None
+
+
+def schedule_rotators(
+    rotator_residents: list[Resident],
+    academic_year: AcademicYear,
+    weeks_per_block: int = 4,     # 1 month ≈ 4 weeks
+    june_block_start: int = 44,   # weeks ≥ this are treated as "June" — block for neuro/psych
+) -> list[Assignment]:
+    """
+    Generate pre-scheduled Assignment objects for all named rotators.
+
+    Algorithm: sequential stagger with per-program, per-rotation cursors.
+    Each program's rotators go through their rotation sequence one at a time;
+    the rotation cursor advances after each 4-week block so max 1 rotator
+    per program is at each rotation simultaneously.
+
+    Multiple programs CAN overlap at the same rotation simultaneously
+    (they fill different intern slots).
+
+    Returns a list of Assignment objects ready to be injected into the solver.
+    """
+    bl = set(academic_year.blackout_weeks)
+    max_w = academic_year.total_weeks
+    assignments: list[Assignment] = []
+
+    def _rotators_by_prefix(prefix: str) -> list[Resident]:
+        rs = [r for r in rotator_residents if r.resident_id.startswith(prefix)]
+        rs.sort(key=lambda r: int(r.resident_id[len(prefix):]))
+        return rs
+
+    def _stagger(rotators, rotation_sequence, specialty, start_w=3,
+                 block_weeks=weeks_per_block, cutoff=max_w):
+        """
+        Schedule each rotator through their rotation_sequence.
+        rot_cursors: independent per-rotation cursor for this program.
+        Each rotator's blocks are strictly sequential (no self-overlap).
+        """
+        rot_cursors: dict[str, int] = {r: start_w for r in rotation_sequence}
+        for res in rotators:
+            earliest = start_w
+            for rot_id in rotation_sequence:
+                cursor = max(rot_cursors.get(rot_id, start_w), earliest)
+                block = _find_block(cursor, block_weeks, bl, cutoff)
+                if block:
+                    assignments.append(Assignment(
+                        resident_id=res.resident_id,
+                        rotation_id=rot_id,
+                        start_week=block[0],
+                        end_week=block[1],
+                        is_rotator_slot=True,
+                        rotator_specialty=specialty,
+                    ))
+                    rot_cursors[rot_id] = block[1] + 1
+                    earliest = block[1] + 1
+
+    # ── EM: 8 rotators × 1 month MICU each, no June block ─────────────────
+    _stagger(_rotators_by_prefix("em"), ["MICU"], "Emergency Medicine", start_w=3)
+
+    # ── Psychiatry: 8 rotators × 1 month VA each, block June ───────────────
+    # cutoff = june_block_start - 1 so no block starts in/after June
+    _stagger(_rotators_by_prefix("psy"), ["VA"], "Psychiatry",
+             start_w=3, cutoff=june_block_start - 1)
+
+    # ── Anesthesia: 10 rotators × (1 MICU + 1 SLUH) each ──────────────────
+    # Rotation sequence: MICU first, then SLUH (can overlap across residents)
+    _stagger(_rotators_by_prefix("anes"), ["MICU", "SLUH"], "Anesthesia", start_w=3)
+
+    # ── Neurology: 6 rotators × 4 months (SLUH→VA→MICU→SLUH), block June ──
+    _stagger(_rotators_by_prefix("neuro"),
+             ["SLUH", "VA", "MICU", "SLUH"], "Neurology",
+             start_w=3, cutoff=june_block_start - 1)
+
+    return assignments
+
+
+# ---------------------------------------------------------------------------
+# Default Resident Roster (IM program only — rotators handled separately)
 # ---------------------------------------------------------------------------
 
 def default_residents() -> list[Resident]:
     """
-    Placeholder roster. Replace via Configuration page upload or manual entry.
-    Structure: 18 PGY3 categorical, 18 PGY2 categorical, 13 PGY2 preliminary-ish,
+    Placeholder roster for the IM training program.
+    Replace via Configuration page upload or manual entry.
+    Structure: 18 PGY3 categorical, 18 PGY2 categorical, 19 PGY2 preliminary,
     and 31 PGY1 interns (mix of categorical and preliminary).
-    Adjust to match actual program headcount.
     """
     residents = []
     rid = 1
@@ -375,3 +498,8 @@ def default_residents() -> list[Resident]:
         rid += 1
 
     return residents
+
+
+def default_all_residents() -> list[Resident]:
+    """Return IM program residents + all named rotators combined."""
+    return default_residents() + default_rotator_residents()
