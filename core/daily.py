@@ -35,8 +35,8 @@ MK_FLOORS: dict[str, list[str]] = {
 }
 DEFAULT_MK_N_TEAMS = 5
 
-NF_SR_COVERS  = ["Medicine", "MICU", "VA", "Cards/Bronze"]
-NF_INT_COVERS = ["Medicine-1", "Medicine-2", "MICU"]
+NF_SR_COVERS  = ["Admits", "MICU", "VA", "Cards/Bronze"]
+NF_INT_COVERS = ["NF-MedA", "NF-MedB", "NF-MICUi"]
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +107,17 @@ def mk_is_working(group_idx: int, abs_day: int, n_teams: int = 5,
 
 def mk_floor(group_idx: int, abs_day: int, floors: list,
              n_teams: int = 5, days_off_per_turn: int = 2) -> str:
-    """Return the floor name for a working group on a given day."""
-    cycle = n_teams * days_off_per_turn
+    """Return the floor name for a working group on a given day.
+
+    Floor assignment is fixed to the group's position among active teams
+    on week boundaries (abs_day // 7) so that a resident stays on the
+    same floor for a full week before any rotation occurs.
+    """
     off_group = (abs_day // days_off_per_turn) % n_teams
     active = [g for g in range(n_teams) if g != off_group]
     slot = active.index(group_idx)
-    floor_idx = (slot + abs_day // 2) % len(floors)
+    # Rotate floor assignment weekly, not every 2 days
+    floor_idx = (slot + abs_day // 7) % len(floors)
     return floors[floor_idx]
 
 
@@ -129,24 +134,31 @@ def mk_off_group(abs_day: int, n_teams: int = 5,
 def _nf_pattern(n_residents: int, n_days: int, covers: list,
                 days_off_per_turn: int = 1) -> list:
     """
-    Build NF daily rotation.
+    Build NF daily rotation with FIXED coverage positions.
+
+    Each resident is permanently assigned to one coverage area for the
+    entire block.  Residents 0..len(covers)-1 map to covers[0..n-1].
+    Any extra residents (index >= len(covers)) are labeled "Float" —
+    they fill in wherever needed when the pinned resident is off.
+
+    One resident is off each day, cycling through the group.  When they
+    ARE working they always show the same area label.
+
     Returns list[list[dict{resident_idx, assignment}]], length = n_days.
-    One resident is off each day; the rest cover one area each.
     """
+    n_covers = len(covers)
+    fixed = [covers[i] if i < n_covers else "Float" for i in range(n_residents)]
+
     cycle = n_residents * days_off_per_turn
     schedule = []
     for d in range(n_days):
-        pos = d % cycle
-        off_idx = (pos // days_off_per_turn) % n_residents
+        off_idx = (d // days_off_per_turn) % n_residents
         assignments = []
-        active_slot = 0
         for r in range(n_residents):
             if r == off_idx:
                 assignments.append({"resident_idx": r, "assignment": "Off"})
             else:
-                cover = covers[active_slot % len(covers)]
-                assignments.append({"resident_idx": r, "assignment": cover})
-                active_slot += 1
+                assignments.append({"resident_idx": r, "assignment": fixed[r]})
         schedule.append(assignments)
     return schedule
 
