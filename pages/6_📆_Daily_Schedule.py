@@ -376,7 +376,8 @@ with tab_team:
 with tab_cov:
     st.caption(
         "Daily headcounts vs rotation capacity. "
-        "Dashed lines = target capacity (senior cap + intern cap)."
+        "Solid bar = program residents · striped bar = rotator credit · "
+        "red dashed = full capacity target."
     )
 
     day_start = (week_start - 1) * 7
@@ -387,6 +388,24 @@ with tab_cov:
     for w in range(week_start, week_end + 1):
         for dn in DAY_NAMES:
             x_labels.append(f"W{w} {dn}")
+
+    # --- Rotator weekly credit per rotation ----------------------------------
+    # Rotators don't produce Assignment objects, so we compute their average
+    # weekly slot contribution from the rotator_programs config.
+    rotator_programs = st.session_state.get("rotator_programs", [])
+    rotator_credit_sr: dict[str, float] = {}   # rot_id -> avg sr slots/week
+    rotator_credit_int: dict[str, float] = {}  # rot_id -> avg int slots/week
+    active_week_count = max(ay.total_weeks - len(ay.blackout_weeks), 1)
+    for prog in rotator_programs:
+        total_weeks_prog = prog.total_rotators * prog.months_inpatient * (48 / 12)
+        n_elig = max(len(prog.eligible_rotation_ids), 1)
+        wk_per_rot = total_weeks_prog / n_elig
+        for rot_id in prog.eligible_rotation_ids:
+            avg_per_week = wk_per_rot / active_week_count
+            if prog.slot_level == "intern":
+                rotator_credit_int[rot_id] = rotator_credit_int.get(rot_id, 0) + avg_per_week
+            else:
+                rotator_credit_sr[rot_id] = rotator_credit_sr.get(rot_id, 0) + avg_per_week
 
     active_rots = [
         r for r in rotations
@@ -407,18 +426,31 @@ with tab_cov:
             row_rots = active_rots[i: i + cols_per_row]
             cols = st.columns(len(row_rots))
             for col, rot in zip(cols, row_rots):
-                counts = ds.coverage.get(rot.rotation_id, [0] * ds.total_days)
+                rid    = rot.rotation_id
+                counts = ds.coverage.get(rid, [0] * ds.total_days)
                 y = [counts[d] if d < len(counts) else 0
                      for d in range(day_start, day_end)]
                 target = rot.senior_capacity + rot.intern_capacity
+                # Rotator credit (constant across all days for now)
+                rot_credit = rotator_credit_sr.get(rid, 0) + rotator_credit_int.get(rid, 0)
+                y_rot = [round(rot_credit, 2)] * len(y)
 
                 fig = go.Figure()
                 fig.add_bar(
                     x=x_labels, y=y,
                     marker_color=rot.color,
-                    name=rot.name,
-                    hovertemplate="%{x}<br>%{y} residents<extra></extra>",
+                    name="Program residents",
+                    hovertemplate="%{x}<br>%{y} program residents<extra></extra>",
                 )
+                if rot_credit > 0.05:
+                    fig.add_bar(
+                        x=x_labels, y=y_rot,
+                        marker_color="#A7F3D0",
+                        marker_pattern_shape="/",
+                        name=f"Rotator credit (~{rot_credit:.1f}/wk)",
+                        hovertemplate="%{x}<br>~%{y:.1f} rotator slots<extra></extra>",
+                    )
+                    fig.update_layout(barmode="stack")
                 if target > 0:
                     fig.add_hline(
                         y=target, line_dash="dash", line_color="#EF4444",
@@ -427,14 +459,38 @@ with tab_cov:
                     )
                 fig.update_layout(
                     title=rot.name,
-                    height=220,
+                    height=240,
                     margin=dict(l=30, r=10, t=35, b=40),
-                    showlegend=False,
+                    showlegend=rot_credit > 0.05,
+                    legend=dict(orientation="h", y=-0.35, font=dict(size=9)),
                     xaxis=dict(tickangle=45, tickfont=dict(size=8)),
                     yaxis=dict(title="# on", rangemode="tozero"),
                     plot_bgcolor="white",
                 )
                 col.plotly_chart(fig, use_container_width=True)
+
+    # --- Rotator summary table -----------------------------------------------
+    if rotator_programs:
+        st.markdown("---")
+        st.subheader("🔄 Rotator Program Contributions")
+        rot_rows = []
+        for prog in rotator_programs:
+            total_wks = prog.total_rotators * prog.months_inpatient * (48 / 12)
+            n_elig    = max(len(prog.eligible_rotation_ids), 1)
+            rot_rows.append({
+                "Specialty":        prog.specialty,
+                "Rotators":         prog.total_rotators,
+                "Months IP each":   prog.months_inpatient,
+                "Total wks/yr":     f"{total_wks:.0f}",
+                "Pool":             prog.slot_level,
+                "Eligible rotations": ", ".join(prog.eligible_rotation_ids),
+                "Avg wks/rot/yr":   f"{total_wks / n_elig:.1f}",
+            })
+        st.dataframe(pd.DataFrame(rot_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "ℹ️ Rotators fill slots within their eligible rotations but are not yet "
+            "modelled as named individuals — they appear as credit in the stacked bars above."
+        )
 
 
 # =============================================================================

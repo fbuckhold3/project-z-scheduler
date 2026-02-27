@@ -35,6 +35,14 @@ MK_FLOORS: dict[str, list[str]] = {
 }
 DEFAULT_MK_N_TEAMS = 5
 
+# Per-group composition: (n_seniors, n_interns)  index 0 = Mario/A, 1 = Luigi/B …
+# Mario at SLUH carries 2 seniors only; every other team is 1 sr + 2 int.
+# VA teams are 1 sr + 1 int each.
+MK_GROUP_COMPOSITION: dict[str, list[tuple[int, int]]] = {
+    "SLUH": [(2, 0), (1, 2), (1, 2), (1, 2), (1, 2)],
+    "VA":   [(1, 1), (1, 1), (1, 1), (1, 1), (1, 1)],
+}
+
 NF_SR_COVERS  = ["Admits", "MICU", "VA", "Cards/Bronze"]
 NF_INT_COVERS = ["NF-MedA", "NF-MedB", "NF-MICUi"]
 
@@ -230,7 +238,42 @@ def build_daily_schedule(
                        if a.rotation_id == rot_id})
         mk_all_residents[rot_id] = rids
 
-    # Assign groups (0–4) round-robin by sorted resident_id
+    # ---------- Level-aware MK group assignment ----------------------------------
+    # Seniors and interns are distributed across groups following MK_GROUP_COMPOSITION.
+    # For SLUH: Mario (g=0) gets 2 seniors, each other group gets 1 senior + 2 interns.
+    # For VA  : every group gets 1 senior + 1 intern.
+
+    def _mk_group_assign(rot_id_: str, rids_: list) -> dict[str, int]:
+        composition = MK_GROUP_COMPOSITION.get(rot_id_)
+        n = DEFAULT_MK_N_TEAMS
+        if not composition:
+            return {rid: i % n for i, rid in enumerate(sorted(rids_))}
+        srs  = sorted([r for r in rids_ if res_map.get(r) and res_map[r].is_senior])
+        ints = sorted([r for r in rids_ if res_map.get(r) and not res_map[r].is_senior])
+        sr_per  = [c[0] for c in composition]
+        int_per = [c[1] for c in composition]
+        sr_cyc  = sum(sr_per)
+        int_cyc = sum(int_per)
+        gmap: dict[str, int] = {}
+        for i, rid in enumerate(srs):
+            pos, cs = (i % sr_cyc if sr_cyc else 0), 0
+            for g, cnt in enumerate(sr_per):
+                cs += cnt
+                if pos < cs:
+                    gmap[rid] = g; break
+        for i, rid in enumerate(ints):
+            if not int_cyc:
+                gmap[rid] = 0; continue
+            pos, cs = i % int_cyc, 0
+            for g, cnt in enumerate(int_per):
+                cs += cnt
+                if pos < cs:
+                    gmap[rid] = g; break
+        for rid in rids_:
+            if rid not in gmap:
+                gmap[rid] = len(gmap) % n
+        return gmap
+
     mk_group_map: dict[str, dict[str, int]] = {}   # rot_id -> {res_id -> group_idx}
     mk_groups_out: dict[str, list[MKGroup]] = {}
 
@@ -240,7 +283,7 @@ def build_daily_schedule(
         team_names = MK_TEAM_NAMES.get(rot_id, [f"T{i}" for i in range(n_teams)])
         floors     = MK_FLOORS.get(rot_id,     [f"F{i}" for i in range(n_teams - 1)])
 
-        group_map: dict[str, int] = {rid: i % n_teams for i, rid in enumerate(rids)}
+        group_map: dict[str, int] = _mk_group_assign(rot_id, rids)
         mk_group_map[rot_id] = group_map
 
         # Build MKGroup objects (one per group index)

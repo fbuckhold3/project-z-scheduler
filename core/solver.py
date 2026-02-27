@@ -217,6 +217,7 @@ class GreedySolver:
                         r for r in seniors
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, micu)
+                        and not self._ip_would_violate(r.resident_id, w)
                     ]
                     # Sort by fewest ABABA assignments first, then shuffle for fairness
                     available.sort(key=lambda r: senior_ababa_count[r.resident_id])
@@ -233,6 +234,7 @@ class GreedySolver:
                         r for r in interns
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, micu)
+                        and not self._ip_would_violate(r.resident_id, w)
                     ]
                     avail_i.sort(key=lambda r: intern_ababa_count[r.resident_id])
                     chosen_i = avail_i[:intern_cap]
@@ -247,6 +249,7 @@ class GreedySolver:
                         r for r in seniors
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, bronze)
+                        and not self._ip_would_violate(r.resident_id, w)
                     ]
                     available.sort(key=lambda r: senior_ababa_count[r.resident_id])
                     chosen = available[:bronze_cap]
@@ -254,6 +257,42 @@ class GreedySolver:
                         self.grid[w][res.resident_id] = "Bronze"
                         self.weekly_slots[w]["Bronze"].append(res.resident_id)
                         senior_ababa_count[res.resident_id] += 1
+
+        # B-weeks (indices 1, 3 of each 5-week cycle): fill MICU only.
+        # These are the "off" weeks of the A-cohort; a fresh B-cohort staffs MICU
+        # so that MICU has coverage every week.  The ababa_count tracking ensures
+        # residents who just did an A-week are ranked lower and a different set is chosen.
+        if micu:
+            for cycle in cycles:
+                for bi in [1, 3]:
+                    if bi >= len(cycle):
+                        break
+                    w = cycle[bi]
+                    if micu_cap > 0:
+                        available = [
+                            r for r in seniors
+                            if self.grid[w].get(r.resident_id) is None
+                            and _level_ok(r, micu)
+                            and not self._ip_would_violate(r.resident_id, w)
+                        ]
+                        available.sort(key=lambda r: senior_ababa_count[r.resident_id])
+                        for res in available[:micu_cap]:
+                            self.grid[w][res.resident_id] = "MICU"
+                            self.weekly_slots[w]["MICU"].append(res.resident_id)
+                            senior_ababa_count[res.resident_id] += 1
+                    intern_cap = micu.intern_capacity
+                    if intern_cap > 0:
+                        avail_i = [
+                            r for r in interns
+                            if self.grid[w].get(r.resident_id) is None
+                            and _level_ok(r, micu)
+                            and not self._ip_would_violate(r.resident_id, w)
+                        ]
+                        avail_i.sort(key=lambda r: intern_ababa_count[r.resident_id])
+                        for res in avail_i[:intern_cap]:
+                            self.grid[w][res.resident_id] = "MICU"
+                            self.weekly_slots[w]["MICU"].append(res.resident_id)
+                            intern_ababa_count[res.resident_id] += 1
 
     # ------------------------------------------------------------------
     # NF assignment
