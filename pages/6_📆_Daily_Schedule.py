@@ -13,8 +13,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from core.daily import (
-    build_daily_schedule, mk_off_group, mk_week_roster,
-    DailySchedule, DAY_NAMES, MK_TEAM_NAMES, MK_FLOORS,
+    build_daily_schedule, mk_off_group, mk_floor, mk_is_working,
+    mk_week_roster, DailySchedule, DAY_NAMES, MK_TEAM_NAMES, MK_FLOORS,
     NF_SR_COVERS, NF_INT_COVERS,
 )
 from core.defaults import (
@@ -307,13 +307,12 @@ with tab_team:
                 for di in range(7):
                     abs_d = w_day0 + di
                     cls   = "wk-sep" if di == 0 else ""
-                    off_g = mk_off_group(abs_d, n_teams, int(mk_days_off))
-                    if g.group_idx == off_g:
+                    working = mk_is_working(g.group_idx, abs_d, n_teams, int(mk_days_off))
+                    if not working:
                         html += f'<td class="c-off {cls}">off</td>'
                     else:
-                        floor_idx = ([x for x in range(n_teams) if x != off_g].index(g.group_idx)
-                                     + abs_d // 2) % len(floors)
-                        fl = floors[floor_idx] if floors else "—"
+                        fl = mk_floor(g.group_idx, abs_d, floors, n_teams, int(mk_days_off)) \
+                             if floors else "—"
                         html += (f'<td class="c-work {cls}" '
                                  f'style="background:{bg}">{fl}</td>')
             html += '</tr>'

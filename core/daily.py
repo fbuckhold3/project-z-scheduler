@@ -109,16 +109,24 @@ def mk_floor(group_idx: int, abs_day: int, floors: list,
              n_teams: int = 5, days_off_per_turn: int = 2) -> str:
     """Return the floor name for a working group on a given day.
 
-    Floor assignment is fixed to the group's position among active teams
-    on week boundaries (abs_day // 7) so that a resident stays on the
-    same floor for a full week before any rotation occurs.
+    Uses a stint-based approach: a team's floor advances exactly once each
+    time they return from an off period.  This gives 3 consistent floor
+    stints within a typical 3-week (21-day) block.
+
+    During an off period the value returned is the PREVIOUS stint's floor
+    (caller should check mk_is_working before using this value).
     """
-    off_group = (abs_day // days_off_per_turn) % n_teams
-    active = [g for g in range(n_teams) if g != off_group]
-    slot = active.index(group_idx)
-    # Rotate floor assignment weekly, not every 2 days
-    floor_idx = (slot + abs_day // 7) % len(floors)
-    return floors[floor_idx]
+    cycle = n_teams * days_off_per_turn          # e.g. 10
+    off_start = group_idx * days_off_per_turn    # when this group's off window starts in cycle
+    complete_cycles = abs_day // cycle
+    pos_in_cycle    = abs_day % cycle
+    # Count completed off-periods for this group up to (not including) abs_day.
+    # An off-period is "completed" once we're past its end inside the current cycle.
+    if pos_in_cycle >= off_start + days_off_per_turn:
+        n_completed_off = complete_cycles + 1
+    else:
+        n_completed_off = complete_cycles
+    return floors[n_completed_off % len(floors)]
 
 
 def mk_off_group(abs_day: int, n_teams: int = 5,
@@ -131,35 +139,49 @@ def mk_off_group(abs_day: int, n_teams: int = 5,
 # NF helpers
 # ---------------------------------------------------------------------------
 
-def _nf_pattern(n_residents: int, n_days: int, covers: list,
-                days_off_per_turn: int = 1) -> list:
+def _rotation_chunks(n_units: int, n_days: int, areas: list,
+                     chunk_size: int, off_nights: int = 1) -> list:
     """
-    Build NF daily rotation with FIXED coverage positions.
+    Build a chunk-based rotation schedule where each unit (resident/intern)
+    cycles through ALL areas in multi-day stints.
 
-    Each resident is permanently assigned to one coverage area for the
-    entire block.  Residents 0..len(covers)-1 map to covers[0..n-1].
-    Any extra residents (index >= len(covers)) are labeled "Float" —
-    they fill in wherever needed when the pinned resident is off.
+    Pattern per unit:
+        chunk_size nights on area[0] → off_nights off →
+        chunk_size nights on area[1] → off_nights off → … repeat
 
-    One resident is off each day, cycling through the group.  When they
-    ARE working they always show the same area label.
+    Units are staggered evenly in phase so that every area is staffed
+    every night.
+
+    Math (verified for standard NF staffing):
+        chunk_period = chunk_size + off_nights
+        cycle        = n_areas * chunk_period
+        stagger      = cycle // n_units    (must be integer for perfect coverage)
+
+      Senior NF : n=5, areas=4, chunk=4, off=1  → cycle=20, stagger=4  ✓
+      Intern NF : n=4, areas=3, chunk=3, off=1  → cycle=12, stagger=3  ✓
 
     Returns list[list[dict{resident_idx, assignment}]], length = n_days.
     """
-    n_covers = len(covers)
-    fixed = [covers[i] if i < n_covers else "Float" for i in range(n_residents)]
+    n_areas      = len(areas)
+    chunk_period = chunk_size + off_nights
+    cycle        = n_areas * chunk_period
+    stagger      = cycle // n_units if (n_units > 0 and cycle % n_units == 0) \
+                   else max(1, round(cycle / max(n_units, 1)))
 
-    cycle = n_residents * days_off_per_turn
+    def _assign(phase: int) -> str:
+        p   = phase % cycle
+        pos = p % chunk_period
+        if pos >= chunk_size:
+            return "Off"
+        return areas[(p // chunk_period) % n_areas]
+
     schedule = []
     for d in range(n_days):
-        off_idx = (d // days_off_per_turn) % n_residents
-        assignments = []
-        for r in range(n_residents):
-            if r == off_idx:
-                assignments.append({"resident_idx": r, "assignment": "Off"})
-            else:
-                assignments.append({"resident_idx": r, "assignment": fixed[r]})
-        schedule.append(assignments)
+        row = []
+        for u in range(n_units):
+            phase = (d + u * stagger) % cycle
+            row.append({"resident_idx": u, "assignment": _assign(phase)})
+        schedule.append(row)
     return schedule
 
 
@@ -288,7 +310,11 @@ def build_daily_schedule(
 
     nf_blocks_out: dict = {}
 
+    # chunk sizes matched to the stagger math: senior 4-night chunks, intern 3-night
+    NF_CHUNK: dict[str, int] = {"senior": 4, "intern": 3}
+
     def _process_nf(groups_dict: dict, level: str, covers: list):
+        chunk_size = NF_CHUNK.get(level, 3)
         for (rot_id, sw, ew), rids in groups_dict.items():
             n_weeks = ew - sw + 1
             n_days  = n_weeks * 7
@@ -297,7 +323,7 @@ def build_daily_schedule(
             n_res = len(sorted_rids)
             if n_res == 0:
                 continue
-            daily = _nf_pattern(n_res, n_days, covers)
+            daily = _rotation_chunks(n_res, n_days, covers, chunk_size=chunk_size)
             block = NfBlock(
                 rotation_id=rot_id,
                 start_week=sw,
