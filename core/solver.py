@@ -996,12 +996,17 @@ def run_solver(
     method: str = "greedy",
     time_limit_sec: int = 120,
     seed: int = 42,
+    pre_assigned: list = None,
 ) -> SolveResult:
     """
     Dispatch to the chosen solver.
     method: "greedy" | "cpsat"
+    pre_assigned: list of Assignment objects to inject before solving
+                  (used for rotator pre-scheduled blocks).
     """
     if method == "cpsat":
         return CPSATSolver(residents, rotations, academic_year, time_limit_sec).solve()
     else:
-        return GreedySolver(residents, rotations, academic_year, seed=seed).solve()
+        return GreedySolver(residents, rotations, academic_year, seed=seed).solve(
+            pre_assigned=pre_assigned
+        )

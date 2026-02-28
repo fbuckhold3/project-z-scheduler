@@ -7,6 +7,7 @@ import time
 from core.defaults import (
     default_academic_year, default_rotations,
     default_rotator_programs, default_residents,
+    default_all_residents, default_rotator_residents, schedule_rotators,
 )
 from core.solver import run_solver
 
@@ -14,7 +15,7 @@ st.set_page_config(page_title="Schedule Builder", page_icon="🔧", layout="wide
 
 if "rotations" not in st.session_state:
     st.session_state.rotations          = default_rotations()
-    st.session_state.residents          = default_residents()
+    st.session_state.residents          = default_all_residents()
     st.session_state.rotator_programs   = default_rotator_programs()
     st.session_state.academic_year      = default_academic_year()
     st.session_state.schedule           = None
@@ -83,6 +84,11 @@ with col_btn:
 
 if build_clicked:
     with st.spinner(f"Running {method.upper()} solver…"):
+        # Build rotator pre-assignments from the named rotator residents
+        rotator_res = [r for r in st.session_state.residents
+                       if r.resident_type == "rotator"]
+        pre_assigned = schedule_rotators(rotator_res, st.session_state.academic_year)
+
         result = run_solver(
             residents=st.session_state.residents,
             rotations=st.session_state.rotations,
@@ -90,6 +96,7 @@ if build_clicked:
             method=method,
             time_limit_sec=time_limit or 120,
             seed=int(seed),
+            pre_assigned=pre_assigned,
         )
     st.session_state.solve_result = result
     if result.success:
