@@ -249,6 +249,8 @@ class GreedySolver:
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, micu)
                         and not self._ip_would_violate(r.resident_id, w)
+                        # No consecutive MICU/Bronze weeks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
                     ]
                     # Sort by fewest ABABA assignments first, then shuffle for fairness
                     available.sort(key=lambda r: senior_ababa_count[r.resident_id])
@@ -266,6 +268,8 @@ class GreedySolver:
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, micu)
                         and not self._ip_would_violate(r.resident_id, w)
+                        # No consecutive MICU/Bronze weeks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
                     ]
                     avail_i.sort(key=lambda r: intern_ababa_count[r.resident_id])
                     chosen_i = avail_i[:intern_cap]
@@ -281,6 +285,8 @@ class GreedySolver:
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, bronze)
                         and not self._ip_would_violate(r.resident_id, w)
+                        # No consecutive MICU/Bronze weeks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
                     ]
                     available.sort(key=lambda r: senior_ababa_count[r.resident_id])
                     chosen = available[:bronze_cap]
@@ -305,6 +311,10 @@ class GreedySolver:
                             if self.grid[w].get(r.resident_id) is None
                             and _level_ok(r, micu)
                             and not self._ip_would_violate(r.resident_id, w)
+                            # No consecutive MICU/Bronze weeks (check both neighbours;
+                            # A-weeks are already in the grid when B-weeks are filled)
+                            and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
+                            and self.grid.get(w + 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
                         ]
                         available.sort(key=lambda r: senior_ababa_count[r.resident_id])
                         for res in available[:micu_cap]:
@@ -318,6 +328,9 @@ class GreedySolver:
                             if self.grid[w].get(r.resident_id) is None
                             and _level_ok(r, micu)
                             and not self._ip_would_violate(r.resident_id, w)
+                            # No consecutive MICU/Bronze weeks
+                            and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
+                            and self.grid.get(w + 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
                         ]
                         avail_i.sort(key=lambda r: intern_ababa_count[r.resident_id])
                         for res in avail_i[:intern_cap]:
@@ -542,6 +555,9 @@ class GreedySolver:
         ip_rots = [r for r in [sluh, va, gold, cards]
                    if r and r.active and r.rot_type == RotationType.IP]
 
+        # Prevent direct SLUH↔VA transitions: no back-to-back sibling MK blocks
+        MK_SIBLINGS: dict[str, str] = {"SLUH": "VA", "VA": "SLUH"}
+
         for w in active_weeks:
             # Determine capacity already filled by prior steps
             for rot in ip_rots:
@@ -561,6 +577,7 @@ class GreedySolver:
                     continue
 
                 # Senior fill
+                sibling = MK_SIBLINGS.get(rot.rotation_id)
                 if need_s > 0:
                     candidates = [
                         r for r in self.residents
@@ -569,6 +586,8 @@ class GreedySolver:
                         and _level_ok(r, rot)
                         and self.grid[w].get(r.resident_id) is None
                         and not self._ip_would_violate(r.resident_id, w)
+                        # No direct SLUH↔VA back-to-back blocks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != sibling
                     ]
                     # Prioritize those with fewest total IP weeks (balance load)
                     candidates.sort(key=lambda r: self._ip_weeks_so_far(r.resident_id, active_weeks))
@@ -586,6 +605,8 @@ class GreedySolver:
                         and _level_ok(r, rot)
                         and self.grid[w].get(r.resident_id) is None
                         and not self._ip_would_violate(r.resident_id, w)
+                        # No direct SLUH↔VA back-to-back blocks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != sibling
                     ]
                     candidates.sort(key=lambda r: self._ip_weeks_so_far(r.resident_id, active_weeks))
                     chosen = candidates[:need_i]
