@@ -565,6 +565,7 @@ class GreedySolver:
                     candidates = [
                         r for r in self.residents
                         if r.is_senior
+                        and r.resident_type != "rotator"
                         and _level_ok(r, rot)
                         and self.grid[w].get(r.resident_id) is None
                         and not self._ip_would_violate(r.resident_id, w)
@@ -581,6 +582,7 @@ class GreedySolver:
                     candidates = [
                         r for r in self.residents
                         if not r.is_senior
+                        and r.resident_type != "rotator"
                         and _level_ok(r, rot)
                         and self.grid[w].get(r.resident_id) is None
                         and not self._ip_would_violate(r.resident_id, w)
