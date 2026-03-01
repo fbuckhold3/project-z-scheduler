@@ -19,12 +19,12 @@ st.set_page_config(page_title="Schedule Builder", page_icon="🔧", layout="wide
 # ---------------------------------------------------------------------------
 
 def _assignments_to_df(assignments: list, res_map: dict) -> pd.DataFrame:
-    """Convert Assignment objects → editable DataFrame for the rotator editor."""
+    """Convert Assignment objects → editable DataFrame for the rotator editor.
+    No hidden columns — resident_id is looked up by name in _df_to_assignments."""
     rows = []
     for a in assignments:
         res = res_map.get(a.resident_id)
         rows.append({
-            "resident_id": a.resident_id,
             "Resident":   res.name if res else a.resident_id,
             "Program":    a.rotator_specialty or (res.notes if res else ""),
             "Rotation":   a.rotation_id,
@@ -34,24 +34,28 @@ def _assignments_to_df(assignments: list, res_map: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _df_to_assignments(df: pd.DataFrame) -> list:
-    """Convert the edited DataFrame → Assignment objects for the solver."""
+def _df_to_assignments(df: pd.DataFrame, name_to_id: dict) -> list:
+    """Convert the edited DataFrame → Assignment objects for the solver.
+    Derives resident_id by looking up the Resident display name."""
     result = []
     for _, row in df.iterrows():
-        rid = row.get("resident_id")
-        rot = row.get("Rotation")
-        sw  = row.get("Start Week")
-        ew  = row.get("End Week")
-        # Skip blank or incomplete rows (newly added but not filled)
-        if not rid or not rot or pd.isna(rid) or pd.isna(sw) or pd.isna(ew):
+        name = row.get("Resident")
+        rot  = row.get("Rotation")
+        sw   = row.get("Start Week")
+        ew   = row.get("End Week")
+        # Skip blank or incomplete rows
+        if not name or not rot or pd.isna(sw) or pd.isna(ew):
             continue
+        rid = name_to_id.get(str(name))
+        if not rid:
+            continue  # unknown name — skip
         result.append(Assignment(
-            resident_id=str(rid),
+            resident_id=rid,
             rotation_id=str(rot),
             start_week=int(sw),
             end_week=int(ew),
             is_rotator_slot=True,
-            rotator_specialty=str(row.get("Program", "")),
+            rotator_specialty=str(row.get("Program", "") or ""),
         ))
     return result
 
@@ -157,14 +161,13 @@ with st.expander("📋 Rotator Pre-Schedule", expanded=True):
     edited_df = st.data_editor(
         st.session_state.rotator_assignments,
         column_config={
-            "resident_id": None,   # hidden — preserved for round-trip conversion
             "Resident":   st.column_config.SelectboxColumn(
                 "Resident", options=rotator_names,
                 help="External rotator name",
             ),
             "Program":    st.column_config.TextColumn(
                 "Program", disabled=True,
-                help="Specialty program (auto-filled from Resident)",
+                help="Specialty program",
             ),
             "Rotation":   st.column_config.SelectboxColumn(
                 "Rotation", options=IP_ROTATION_IDS,
@@ -183,15 +186,6 @@ with st.expander("📋 Rotator Pre-Schedule", expanded=True):
         num_rows="dynamic",
         key="rotator_editor",
     )
-
-    # Re-sync resident_id from Resident name (needed for newly added rows)
-    edited_df["resident_id"] = edited_df["Resident"].map(rotator_name_to_id)
-    # Re-sync Program from resident notes (for newly added rows)
-    def _prog_from_name(name):
-        rid = rotator_name_to_id.get(name, "")
-        res = res_map.get(rid)
-        return res.notes if res else ""
-    edited_df["Program"] = edited_df["Resident"].map(_prog_from_name)
     st.session_state.rotator_assignments = edited_df
 
     valid_rows = edited_df.dropna(subset=["Resident", "Rotation"])
@@ -212,7 +206,7 @@ with col_btn:
 if build_clicked:
     with st.spinner(f"Running {method.upper()} solver…"):
         # Use the (possibly edited) rotator pre-schedule from the table above
-        pre_assigned = _df_to_assignments(st.session_state.rotator_assignments)
+        pre_assigned = _df_to_assignments(st.session_state.rotator_assignments, rotator_name_to_id)
 
         result = run_solver(
             residents=st.session_state.residents,
