@@ -54,7 +54,7 @@ with col_f1:
 with col_f2:
     type_filter = st.multiselect(
         "Filter by resident type",
-        options=["categorical", "preliminary"],
+        options=["categorical", "preliminary", "rotator"],
         default=["categorical", "preliminary"],
     )
 with col_f3:
