@@ -110,7 +110,7 @@ with col1:
         _rot_map = {r.rotation_id: r for r in _rotations}
         _res_map = {r.resident_id: r for r in _residents}
         _ay = _schedule.academic_year
-        weeks = _ay.all_weeks(include_blackout=True)
+        weeks = _ay.all_weeks()
 
         # ------ Sheet 1: Schedule Grid ------
         ws = wb.add_worksheet("Schedule Grid")
@@ -120,10 +120,6 @@ with col1:
             "border": 1, "font_size": 8,
         })
         default_fmt = wb.add_format({"border": 1, "font_size": 8})
-        blackout_fmt = wb.add_format({
-            "bg_color": "#374151", "font_color": "#FFFFFF",
-            "border": 1, "font_size": 8,
-        })
 
         # Cache rotation cell formats
         rot_fmt_cache = {}
@@ -160,16 +156,13 @@ with col1:
             ws.write(i + 1, 2, res.resident_type,  default_fmt)
             for j, w in enumerate(weeks):
                 col = j + 3
-                if _ay.is_blackout(w):
-                    ws.write(i + 1, col, "—", blackout_fmt)
+                a = _schedule.get_resident_week(res.resident_id, w)
+                if a:
+                    rot = _rot_map.get(a.rotation_id)
+                    fmt = rot_fmt_cache.get(a.rotation_id, default_fmt)
+                    ws.write(i + 1, col, rot.abbrev if rot else a.rotation_id, fmt)
                 else:
-                    a = _schedule.get_resident_week(res.resident_id, w)
-                    if a:
-                        rot = _rot_map.get(a.rotation_id)
-                        fmt = rot_fmt_cache.get(a.rotation_id, default_fmt)
-                        ws.write(i + 1, col, rot.abbrev if rot else a.rotation_id, fmt)
-                    else:
-                        ws.write(i + 1, col, "", default_fmt)
+                    ws.write(i + 1, col, "", default_fmt)
 
         ws.freeze_panes(1, 3)
 

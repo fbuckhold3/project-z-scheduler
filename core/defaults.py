@@ -15,12 +15,11 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 def default_academic_year() -> AcademicYear:
-    """48-week year, no blackout weeks."""
+    """48-week academic year."""
     return AcademicYear(
         label="2025-2026",
         total_weeks=48,
         start_date="2025-07-07",
-        blackout_weeks=[],
     )
 
 
@@ -314,16 +313,14 @@ def default_rotator_residents() -> list[Resident]:
 # Rotator pre-scheduling
 # ---------------------------------------------------------------------------
 
-def _find_block(start: int, n: int, blackouts: set, max_w: int) -> tuple[int, int] | None:
+def _find_block(start: int, n: int, max_w: int) -> tuple[int, int] | None:
     """
-    Find the first window of n consecutive weeks with no blackouts,
-    starting at or after 'start'.  Returns (first_week, last_week) or None.
+    Find the first window of n consecutive weeks starting at or after 'start'.
+    Returns (first_week, last_week) or None if it would exceed max_w.
     """
     w = start
-    while w + n - 1 <= max_w:
-        if not any(x in blackouts for x in range(w, w + n)):
-            return (w, w + n - 1)
-        w += 1
+    if w + n - 1 <= max_w:
+        return (w, w + n - 1)
     return None
 
 
@@ -346,7 +343,6 @@ def schedule_rotators(
 
     Returns a list of Assignment objects ready to be injected into the solver.
     """
-    bl = set(academic_year.blackout_weeks)
     max_w = academic_year.total_weeks
     assignments: list[Assignment] = []
 
@@ -367,7 +363,7 @@ def schedule_rotators(
             earliest = start_w
             for rot_id in rotation_sequence:
                 cursor = max(rot_cursors.get(rot_id, start_w), earliest)
-                block = _find_block(cursor, block_weeks, bl, cutoff)
+                block = _find_block(cursor, block_weeks, cutoff)
                 if block:
                     assignments.append(Assignment(
                         resident_id=res.resident_id,

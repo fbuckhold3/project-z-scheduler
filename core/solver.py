@@ -96,12 +96,12 @@ class GreedySolver:
 
         # week → {resident_id → rotation_id}
         self.grid: dict[int, dict[str, str]] = {
-            w: {} for w in self.ay.all_weeks(include_blackout=True)
+            w: {} for w in self.ay.all_weeks()
         }
         # week → {rotation_id → [resident_ids]}
         self.weekly_slots: dict[int, dict[str, list[str]]] = {
             w: {r.rotation_id: [] for r in rotations}
-            for w in self.ay.all_weeks(include_blackout=True)
+            for w in self.ay.all_weeks()
         }
 
     # ------------------------------------------------------------------
@@ -116,18 +116,13 @@ class GreedySolver:
         """
         t0 = time.time()
 
-        active_weeks = self.ay.all_weeks(include_blackout=False)
+        active_weeks = self.ay.all_weeks()
 
         # Step 0: inject pre-assigned rotator blocks
         if pre_assigned:
             self._inject_assignments(pre_assigned)
 
-        # Step 1: blackout → vacation placeholder
-        for w in self.ay.blackout_weeks:
-            for res in self.residents:
-                self.grid[w][res.resident_id] = "VACATION"
-
-        # Step 2: NF first so ABABA's sliding-window check sees NF as IP weeks
+        # Step 1: NF first so ABABA's sliding-window check sees NF as IP weeks
         self._assign_nf(active_weeks)
 
         # Step 3: ABABA (MICU and Bronze) — NF weeks now in grid
@@ -382,8 +377,7 @@ class GreedySolver:
             w1 = active_weeks[i]
             w2 = active_weeks[i + 1]
             if w2 == w1 + 1:  # consecutive
-                # Check week before w1 and after w2 are not blackout
-                # (they'll be OP/clinic — that's fine; just can't be IP)
+                # Adjacent weeks — valid NF window
                 valid_windows.append((w1, w2))
 
         if not valid_windows:
@@ -672,7 +666,7 @@ class GreedySolver:
         """Check hard constraint violations in the generated schedule."""
         violations = 0
         details = []
-        active = self.ay.all_weeks(include_blackout=False)
+        active = self.ay.all_weeks()
 
         for res in self.residents:
             # Rotators follow their own external schedule; skip IM constraint checks
@@ -765,7 +759,7 @@ class CPSATSolver:
         t0 = time.time()
         model = cp_model.CpModel()
 
-        active_weeks = self.ay.all_weeks(include_blackout=False)
+        active_weeks = self.ay.all_weeks()
         n_weeks = len(active_weeks)
         w_idx = {w: i for i, w in enumerate(active_weeks)}
 

@@ -55,27 +55,13 @@ with tab_ay:
         new_start = st.text_input("Start date (YYYY-MM-DD)", value=ay.start_date)
 
     with col2:
-        st.markdown("**Blackout weeks** (comma-separated week numbers, 1-indexed)")
-        blackout_str = st.text_input(
-            "Blackout weeks",
-            value=", ".join(str(w) for w in ay.blackout_weeks),
-            help="Weeks when the program is closed (July 4 ramp, Dec holiday, etc.)",
-        )
-        try:
-            new_blackout = [int(x.strip()) for x in blackout_str.split(",") if x.strip()]
-        except ValueError:
-            st.error("Please enter comma-separated integers.")
-            new_blackout = ay.blackout_weeks
-
-        st.markdown(f"**Active weeks:** {new_total - len(new_blackout)}")
-        st.markdown(f"**Blackout weeks:** {sorted(new_blackout)}")
+        st.markdown(f"**Total weeks:** {new_total}")
 
     if st.button("💾 Save Academic Year", key="save_ay"):
         st.session_state.academic_year = AcademicYear(
             label=new_label,
             total_weeks=int(new_total),
             start_date=new_start,
-            blackout_weeks=sorted(new_blackout),
         )
         st.session_state.schedule = None
         st.session_state.feasibility = None

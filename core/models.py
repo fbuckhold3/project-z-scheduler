@@ -155,32 +155,21 @@ class Resident:
 class AcademicYear:
     label: str = "2025-2026"
     total_weeks: int = 48
-    start_date: str = "2025-07-07"          # First Monday after July 4 holiday block
-    blackout_weeks: list = field(default_factory=list)  # 1-indexed week numbers
+    start_date: str = "2025-07-07"          # First Monday of the academic year
 
-    @property
-    def active_weeks(self) -> int:
-        return self.total_weeks - len(self.blackout_weeks)
-
-    def all_weeks(self, include_blackout: bool = True) -> list:
-        weeks = list(range(1, self.total_weeks + 1))
-        if not include_blackout:
-            weeks = [w for w in weeks if w not in self.blackout_weeks]
-        return weeks
-
-    def is_blackout(self, week: int) -> bool:
-        return week in self.blackout_weeks
+    def all_weeks(self) -> list:
+        return list(range(1, self.total_weeks + 1))
 
     def to_dict(self) -> dict:
         return {
             "label": self.label,
             "total_weeks": self.total_weeks,
             "start_date": self.start_date,
-            "blackout_weeks": self.blackout_weeks,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "AcademicYear":
+        d = {k: v for k, v in d.items() if k in {"label", "total_weeks", "start_date"}}
         return cls(**d)
 
 
@@ -255,13 +244,10 @@ class Schedule:
                 "Type": res.resident_type,
                 "Level": res.level.value,
             }
-            for w in self.academic_year.all_weeks(include_blackout=True):
+            for w in self.academic_year.all_weeks():
                 col = f"W{w:02d}"
-                if self.academic_year.is_blackout(w):
-                    row[col] = "—"
-                else:
-                    a = self.get_resident_week(res.resident_id, w)
-                    row[col] = rot_map.get(a.rotation_id, a.rotation_id) if a else ""
+                a = self.get_resident_week(res.resident_id, w)
+                row[col] = rot_map.get(a.rotation_id, a.rotation_id) if a else ""
             rows.append(row)
         return pd.DataFrame(rows)
 

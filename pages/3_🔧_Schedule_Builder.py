@@ -134,7 +134,7 @@ if sr:
         import pandas as pd
         ay = sr.schedule.academic_year
         rot_map = {r.rotation_id: r for r in st.session_state.rotations}
-        weeks = ay.all_weeks(include_blackout=False)
+        weeks = ay.all_weeks()
 
         weekly_counts = []
         for w in weeks[:24]:  # first 24 active weeks

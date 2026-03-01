@@ -96,7 +96,7 @@ def check_feasibility(
     def res_active_weeks(res: Resident) -> int:
         start = max(res.start_week, 1)
         end = min(res.end_week, academic_year.total_weeks)
-        resident_weeks = set(range(start, end + 1)) - set(academic_year.blackout_weeks)
+        resident_weeks = set(range(start, end + 1))
         return len(resident_weeks)
 
     senior_weeks_avail = sum(res_active_weeks(r) for r in residents if r.is_senior)

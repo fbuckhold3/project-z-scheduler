@@ -111,11 +111,11 @@ with st.expander("📖 Getting Started", expanded=True):
     **Recommended workflow:**
 
     1. **⚙️ Configuration** → Review rotation definitions, update your resident roster
-       (upload a CSV or edit inline), adjust rotator programs and blackout weeks.
+       (upload a CSV or edit inline), and adjust rotator programs.
 
     2. **📊 Capacity Calculator** → Check feasibility *before* solving.
        The calculator tells you whether your roster can cover all required rotations
-       given clinic obligations, blackout weeks, and the max-3-IP-per-6-week constraint.
+       given clinic obligations and the max-3-IP-per-6-week constraint.
 
     3. **🔧 Schedule Builder** → Choose **Greedy** (seconds, good for iteration) or
        **CP-SAT** (minutes, constraint-optimal). Adjust solver parameters as needed.

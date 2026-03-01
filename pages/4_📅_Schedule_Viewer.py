@@ -103,18 +103,14 @@ with tab_grid:
         row_text  = []
         row_color = []
         for w in weeks_shown:
-            if ay.is_blackout(w):
-                row_text.append("—")
-                row_color.append(rot_id_to_num.get("VACATION", 0))
+            a = schedule.get_resident_week(res.resident_id, w)
+            if a:
+                rot = rot_map.get(a.rotation_id)
+                row_text.append(rot.abbrev if rot else a.rotation_id)
+                row_color.append(rot_id_to_num.get(a.rotation_id, len(rot_ids_ordered) - 1))
             else:
-                a = schedule.get_resident_week(res.resident_id, w)
-                if a:
-                    rot = rot_map.get(a.rotation_id)
-                    row_text.append(rot.abbrev if rot else a.rotation_id)
-                    row_color.append(rot_id_to_num.get(a.rotation_id, len(rot_ids_ordered) - 1))
-                else:
-                    row_text.append("")
-                    row_color.append(len(rot_ids_ordered) - 1)
+                row_text.append("")
+                row_color.append(len(rot_ids_ordered) - 1)
         z_text.append(row_text)
         z_color.append(row_color)
 
@@ -268,21 +264,18 @@ with tab_resident:
 
     # Build rotation sequence
     seq = []
-    for w in ay.all_weeks(include_blackout=True):
-        if ay.is_blackout(w):
-            seq.append({"Week": w, "Rotation": "VACATION", "Abbrev": "—", "Color": "#374151"})
+    for w in ay.all_weeks():
+        a = schedule.get_resident_week(res.resident_id, w)
+        if a:
+            rot = rot_map.get(a.rotation_id)
+            seq.append({
+                "Week": w,
+                "Rotation": rot.name if rot else a.rotation_id,
+                "Abbrev": rot.abbrev if rot else a.rotation_id,
+                "Color": rot.color if rot else "#CBD5E1",
+            })
         else:
-            a = schedule.get_resident_week(res.resident_id, w)
-            if a:
-                rot = rot_map.get(a.rotation_id)
-                seq.append({
-                    "Week": w,
-                    "Rotation": rot.name if rot else a.rotation_id,
-                    "Abbrev": rot.abbrev if rot else a.rotation_id,
-                    "Color": rot.color if rot else "#CBD5E1",
-                })
-            else:
-                seq.append({"Week": w, "Rotation": "Unassigned", "Abbrev": "?", "Color": "#E2E8F0"})
+            seq.append({"Week": w, "Rotation": "Unassigned", "Abbrev": "?", "Color": "#E2E8F0"})
 
     df_seq = pd.DataFrame(seq)
 
@@ -354,7 +347,7 @@ with tab_weekly:
     st.subheader("Weekly Rotation Headcounts")
     st.caption("How many residents are on each rotation per week.")
 
-    active_weeks = ay.all_weeks(include_blackout=False)
+    active_weeks = ay.all_weeks()
     weekly_data = []
     for w in active_weeks:
         row = {"Week": w}
