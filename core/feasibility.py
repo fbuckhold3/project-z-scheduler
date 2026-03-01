@@ -88,7 +88,7 @@ def check_feasibility(
       4. Apply 1/6 clinic carve-out.
       5. Check if remaining IP pool covers IP demand.
     """
-    active_weeks = academic_year.active_weeks
+    active_weeks = academic_year.total_weeks
     n_seniors = sum(1 for r in residents if r.is_senior)
     n_interns = sum(1 for r in residents if not r.is_senior)
 
