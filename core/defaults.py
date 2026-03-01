@@ -15,16 +15,12 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 def default_academic_year() -> AcademicYear:
-    """
-    48-week year.
-    Blackout: week 1 (July 4 holiday ramp), week 25-26 (Dec 23–Jan 2 holiday).
-    Adjust in Configuration page.
-    """
+    """48-week year, no blackout weeks."""
     return AcademicYear(
         label="2025-2026",
         total_weeks=48,
         start_date="2025-07-07",
-        blackout_weeks=[1, 25, 26],   # ~Jul 4 block + Dec 23–Jan 2
+        blackout_weeks=[],
     )
 
 

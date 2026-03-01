@@ -127,11 +127,11 @@ class GreedySolver:
             for res in self.residents:
                 self.grid[w][res.resident_id] = "VACATION"
 
-        # Step 2: ABABA pre-assignment (MICU and Bronze)
-        self._assign_ababa(active_weeks)
-
-        # Step 3: NF pre-assignment (2-week blocks, spread through year)
+        # Step 2: NF first so ABABA's sliding-window check sees NF as IP weeks
         self._assign_nf(active_weeks)
+
+        # Step 3: ABABA (MICU and Bronze) — NF weeks now in grid
+        self._assign_ababa(active_weeks)
 
         # Step 4: Clinic (1 per 6-week block)
         self._assign_clinic(active_weeks)
