@@ -158,26 +158,26 @@ with st.expander("📋 Rotator Pre-Schedule", expanded=True):
             st.session_state.rotator_assignments = _assignments_to_df(_pre, res_map)
             st.rerun()
 
+    _REQUIRED_COLS = {"Resident", "Program", "Rotation", "Start Week", "End Week"}
+
     edited_df = st.data_editor(
         st.session_state.rotator_assignments,
         column_config={
+            # No label strings — keys match column names exactly to avoid renaming
             "Resident":   st.column_config.SelectboxColumn(
-                "Resident", options=rotator_names,
+                options=rotator_names,
                 help="External rotator name",
             ),
-            "Program":    st.column_config.TextColumn(
-                "Program", disabled=True,
-                help="Specialty program",
-            ),
+            "Program":    st.column_config.TextColumn(disabled=True),
             "Rotation":   st.column_config.SelectboxColumn(
-                "Rotation", options=IP_ROTATION_IDS,
+                options=IP_ROTATION_IDS,
                 help="Which inpatient service this rotator joins",
             ),
             "Start Week": st.column_config.NumberColumn(
-                "Start Wk", min_value=1, max_value=48, step=1,
+                min_value=1, max_value=48, step=1,
             ),
             "End Week":   st.column_config.NumberColumn(
-                "End Wk", min_value=1, max_value=48, step=1,
+                min_value=1, max_value=48, step=1,
                 help="Inclusive. Default block = 4 weeks (Start + 3).",
             ),
         },
@@ -186,13 +186,21 @@ with st.expander("📋 Rotator Pre-Schedule", expanded=True):
         num_rows="dynamic",
         key="rotator_editor",
     )
-    st.session_state.rotator_assignments = edited_df
 
-    valid_rows = edited_df.dropna(subset=["Resident", "Rotation"])
-    st.caption(
-        f"{len(valid_rows)} block(s) across "
-        f"{valid_rows['Resident'].nunique()} rotator(s)."
-    )
+    # Only update session state when data_editor returns the expected columns.
+    # Some Streamlit/environment combos return a broken df on first render.
+    if _REQUIRED_COLS <= set(edited_df.columns):
+        st.session_state.rotator_assignments = edited_df
+
+    try:
+        _disp = st.session_state.rotator_assignments
+        valid_rows = _disp.dropna(subset=["Resident", "Rotation"])
+        st.caption(
+            f"{len(valid_rows)} block(s) across "
+            f"{valid_rows['Resident'].nunique()} rotator(s)."
+        )
+    except Exception:
+        st.caption(f"{len(st.session_state.rotator_assignments)} block(s) defined.")
 
 # ---------------------------------------------------------------------------
 # Build button
