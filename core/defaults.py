@@ -93,16 +93,16 @@ def default_rotations() -> list[Rotation]:
             abbrev="NF",
             rot_type=RotationType.IP,
             pattern=RotationPattern.NF,
-            senior_capacity=4,   # 5 assigned to cover 4 slots (days off built in)
-            intern_capacity=3,   # 4 assigned to cover 3 slots nightly
+            senior_capacity=5,   # 5 seniors assigned → 4 nightly slots (1 off per night)
+            intern_capacity=4,   # 4 interns assigned → 3 nightly slots (1 off per night)
             min_block_weeks=2,
             max_block_weeks=2,   # always 2-week blocks
             eligible_levels=["senior", "intern"],
             required=True,
             color="#8B5CF6",
             notes=(
-                "14-day block. 5 seniors assigned → 4 slots (1 off per day for wellness). "
-                "4 interns assigned → 3 nightly slots. "
+                "14-day block. 5 seniors assigned → 4 nightly slots (1 off per night). "
+                "4 interns assigned → 3 nightly slots (1 off per night). "
                 "Max 4 consecutive days worked. "
                 "Must have OP/Clinic week on BOTH sides — no IP directly before or after."
             ),

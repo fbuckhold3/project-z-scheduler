@@ -122,16 +122,17 @@ class GreedySolver:
         if pre_assigned:
             self._inject_assignments(pre_assigned)
 
-        # Step 1: NF first so ABABA's sliding-window check sees NF as IP weeks
-        self._assign_nf(active_weeks)
-
-        # Step 3: ABABA (MICU and Bronze) — NF weeks now in grid
-        self._assign_ababa(active_weeks)
-
-        # Step 4: Clinic (1 per 6-week block)
+        # Step 1: Clinic FIRST — guaranteed before any IP so every resident
+        #         gets exactly one clinic slot per 6-week cycle with no conflicts.
         self._assign_clinic(active_weeks)
 
-        # Step 5: Fill SLUH / VA / Gold / Cards
+        # Step 2: NF — works around pre-placed clinic weeks
+        self._assign_nf(active_weeks)
+
+        # Step 3: ABABA (MICU and Bronze) — Clinic + NF weeks now in grid
+        self._assign_ababa(active_weeks)
+
+        # Step 4: Fill SLUH / VA / Gold / Cards
         self._assign_main_ip(active_weeks)
 
         # Step 6: Fill remaining with OP
@@ -232,6 +233,12 @@ class GreedySolver:
         a_indices = [0, 2, 4]
 
         for cycle in cycles:
+            # Track which residents are already assigned within this 5-week cycle.
+            # Giving them priority for subsequent A-weeks promotes 2-3 consecutive
+            # ABABA weeks per resident rather than isolated single-week assignments.
+            cycle_sr: set[str] = set()
+            cycle_in: set[str] = set()
+
             for ai in a_indices:
                 if ai >= len(cycle):
                     break
@@ -250,13 +257,18 @@ class GreedySolver:
                         and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                         and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
                     ]
-                    # Sort by fewest ABABA assignments first, then shuffle for fairness
-                    available.sort(key=lambda r: senior_ababa_count[r.resident_id])
+                    # Prefer residents already in this cycle (promotes full-cycle runs),
+                    # then by fewest total ABABA weeks for fairness.
+                    available.sort(key=lambda r: (
+                        0 if r.resident_id in cycle_sr else 1,
+                        senior_ababa_count[r.resident_id],
+                    ))
                     chosen = available[:micu_cap]
                     for res in chosen:
                         self.grid[w][res.resident_id] = "MICU"
                         self.weekly_slots[w]["MICU"].append(res.resident_id)
                         senior_ababa_count[res.resident_id] += 1
+                        cycle_sr.add(res.resident_id)
 
                 # --- MICU interns ---
                 if micu:
@@ -272,12 +284,16 @@ class GreedySolver:
                         and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                         and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
                     ]
-                    avail_i.sort(key=lambda r: intern_ababa_count[r.resident_id])
+                    avail_i.sort(key=lambda r: (
+                        0 if r.resident_id in cycle_in else 1,
+                        intern_ababa_count[r.resident_id],
+                    ))
                     chosen_i = avail_i[:intern_cap]
                     for res in chosen_i:
                         self.grid[w][res.resident_id] = "MICU"
                         self.weekly_slots[w]["MICU"].append(res.resident_id)
                         intern_ababa_count[res.resident_id] += 1
+                        cycle_in.add(res.resident_id)
 
                 # --- Bronze seniors ---
                 if bronze and bronze_cap > 0:
@@ -292,12 +308,16 @@ class GreedySolver:
                         and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                         and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
                     ]
-                    available.sort(key=lambda r: senior_ababa_count[r.resident_id])
+                    available.sort(key=lambda r: (
+                        0 if r.resident_id in cycle_sr else 1,
+                        senior_ababa_count[r.resident_id],
+                    ))
                     chosen = available[:bronze_cap]
                     for res in chosen:
                         self.grid[w][res.resident_id] = "Bronze"
                         self.weekly_slots[w]["Bronze"].append(res.resident_id)
                         senior_ababa_count[res.resident_id] += 1
+                        cycle_sr.add(res.resident_id)
 
         # B-weeks (indices 1, 3 of each 5-week cycle): fill MICU only.
         # These are the "off" weeks of the A-cohort; a fresh B-cohort staffs MICU
@@ -471,54 +491,44 @@ class GreedySolver:
 
     def _assign_clinic(self, active_weeks: list[int]):
         """
-        Each resident gets exactly 1 clinic week per 6-week window.
-        Within a cycle, spread residents across the 6 clinic-eligible weeks
-        to approximate the 14-14-13-14-14-13 distribution.
+        Assign clinic using a fixed position within each 6-week cycle.
+
+        Resident at index i gets position (i % 6) in every cycle.  Because the
+        position is the same in every cycle, clinic always falls exactly 6 weeks
+        apart — no more, no less — regardless of how other rotations are placed.
+
+        Runs FIRST (before NF / ABABA / main IP) so clinic is never squeezed out.
+
+        If the preferred week is already occupied (e.g. by a rotator pre-assignment),
+        we fall back to the nearest free week within the same cycle.
         """
-        # Build 6-week cycles
         cycles = [active_weeks[i:i+6] for i in range(0, len(active_weeks), 6)]
+        non_rotators = [r for r in self.residents if r.resident_type != "rotator"]
 
-        for cycle in cycles:
-            if not cycle:
-                continue
-            # Rotators do not attend continuity clinic
-            # Assign each resident to one week in this cycle for clinic
-            # Sort residents to distribute: PGY3 first, then PGY2, then interns
-            unassigned = [
-                r for r in self.residents
-                if not any(self.grid[w].get(r.resident_id) for w in cycle)
-                   or all(self.grid[w].get(r.resident_id) is None for w in cycle)
-            ]
-            # Actually: find residents who don't have clinic this cycle yet
-            needs_clinic = []
-            for res in self.residents:
-                if res.resident_type == "rotator":
+        for pos_idx, res in enumerate(non_rotators):
+            base_pos = pos_idx % 6          # fixed clinic position for this resident
+            for cycle in cycles:
+                if not cycle:
                     continue
-                has_clinic = any(
-                    self.grid[w].get(res.resident_id) == "Clinic"
-                    for w in cycle
-                )
-                if not has_clinic:
-                    # Pick the week in this cycle where they have no assignment
-                    free_weeks = [
-                        w for w in cycle
-                        if self.grid[w].get(res.resident_id) is None
-                    ]
-                    if free_weeks:
-                        needs_clinic.append((res, free_weeks))
+                pos = min(base_pos, len(cycle) - 1)   # clamp for short last cycle
+                preferred = cycle[pos]
 
-            # Distribute across weeks to balance counts
-            week_counts: dict[int, int] = {w: 0 for w in cycle}
-            self.rng.shuffle(needs_clinic)
-            for res, free_weeks in needs_clinic:
-                # Pick week with lowest current count among free weeks
-                free_counts = {w: week_counts[w] for w in free_weeks if w in week_counts}
-                if not free_counts:
-                    continue
-                chosen_w = min(free_counts, key=free_counts.get)
-                self.grid[chosen_w][res.resident_id] = "Clinic"
-                self.weekly_slots[chosen_w]["Clinic"].append(res.resident_id)
-                week_counts[chosen_w] += 1
+                # Try the preferred week; fall back to nearest free week in cycle.
+                candidate = None
+                if self.grid[preferred].get(res.resident_id) is None:
+                    candidate = preferred
+                else:
+                    for offset in range(1, len(cycle)):
+                        for w in [preferred - offset, preferred + offset]:
+                            if w in cycle and self.grid[w].get(res.resident_id) is None:
+                                candidate = w
+                                break
+                        if candidate is not None:
+                            break
+
+                if candidate is not None:
+                    self.grid[candidate][res.resident_id] = "Clinic"
+                    self.weekly_slots[candidate]["Clinic"].append(res.resident_id)
 
     # ------------------------------------------------------------------
     # Main IP (SLUH, VA, Gold, Cards)
@@ -877,11 +887,11 @@ class CPSATSolver:
                 for wi in range(n_weeks - 1):
                     v_now  = xvar(ri, wi,     nf_roti)
                     v_next = xvar(ri, wi + 1, nf_roti)
-                    if v_now and v_next:
+                    if v_now is not None and v_next is not None:
                         # If on NF at wi, must also be on NF at wi+1 OR wi-1
                         if wi > 0:
                             v_prev = xvar(ri, wi - 1, nf_roti)
-                            if v_prev:
+                            if v_prev is not None:
                                 model.add_bool_or([v_prev, v_next, v_now.negated()])
                         else:
                             model.add_implication(v_now, v_next)
@@ -890,10 +900,10 @@ class CPSATSolver:
                 for wi in range(n_weeks - 1):
                     v_w1 = xvar(ri, wi,     nf_roti)
                     v_w2 = xvar(ri, wi + 1, nf_roti)
-                    if v_w1 and v_w2:
+                    if v_w1 is not None and v_w2 is not None:
                         for gap_wi in range(wi + 2, min(wi + 8, n_weeks)):
                             v_gap = xvar(ri, gap_wi, nf_roti)
-                            if v_gap:
+                            if v_gap is not None:
                                 model.add_bool_or([v_w1.negated(), v_w2.negated(), v_gap.negated()])
 
                 # No IP adjacent to NF
@@ -907,7 +917,7 @@ class CPSATSolver:
                                 if roti == nf_roti:
                                     continue
                                 v_ip = xvar(ri, adj_wi, roti)
-                                if v_ip:
+                                if v_ip is not None:
                                     model.add_bool_or([v_nf.negated(), v_ip.negated()])
 
         # ------------------------------------------------------------------
@@ -936,7 +946,7 @@ class CPSATSolver:
             for wi in range(n_weeks):
                 for ri in range(n_res):
                     v = xvar(ri, wi, cards_roti)
-                    if v:
+                    if v is not None:
                         penalty_terms.append(v)
         # Maximize optional slots filled (as a soft objective)
         if penalty_terms:
@@ -977,7 +987,7 @@ class CPSATSolver:
                 assigned_rot = None
                 for roti, rot in enumerate(rotations):
                     v = xvar(ri, wi, roti)
-                    if v and solver.value(v) == 1:
+                    if v is not None and solver.value(v) == 1:
                         assigned_rot = rot.rotation_id
                         break
                 grid[(ri, wi)] = assigned_rot
