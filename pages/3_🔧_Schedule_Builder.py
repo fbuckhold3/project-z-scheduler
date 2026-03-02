@@ -147,13 +147,23 @@ elif not st.session_state.feasibility.feasible:
 edited_df = st.session_state.rotator_assignments
 
 st.markdown("---")
-with st.expander("📋 Rotator Pre-Schedule", expanded=True):
+with st.expander("📋 External Rotator Pre-Schedule", expanded=True):
+    st.info(
+        "**What is this?**  \n"
+        "Residents from partner programs (Neurology, EM, Anesthesia, Psychiatry) rotate "
+        "through your service on pre-negotiated agreements. Their blocks are **locked in before "
+        "the solver runs** and count against each rotation's capacity — your own residents fill "
+        "around them.  \n\n"
+        "**What should I do?**  \n"
+        "The table is auto-generated from program defaults. If you have actual scheduled dates "
+        "from the partnering programs, edit the **Start Week** and **End Week** columns to match. "
+        "Otherwise, leave the defaults and click **Build Schedule** — you can always re-run "
+        "after adjusting."
+    )
     st.caption(
-        "Each row is one rotation block for an external rotator. "
         "Edit **Rotation**, **Start Week**, or **End Week** inline. "
         "Use the **＋** icon below the table to add a block; "
-        "select a row and press **Delete** to remove it. "
-        "Click **Build Schedule** below to apply changes."
+        "select a row and press **Delete** to remove it."
     )
 
     col_reset, col_info = st.columns([1, 3])
