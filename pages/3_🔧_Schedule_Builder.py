@@ -142,13 +142,18 @@ elif not st.session_state.feasibility.feasible:
 # ---------------------------------------------------------------------------
 # Rotator Pre-Schedule editor
 # ---------------------------------------------------------------------------
+# Safety default: edited_df is assigned inside the expander (same Python scope),
+# but initialise here so the Build section always has a valid reference.
+edited_df = st.session_state.rotator_assignments
+
 st.markdown("---")
 with st.expander("📋 Rotator Pre-Schedule", expanded=True):
     st.caption(
-        "Auto-generated 4-week blocks for all external rotators. "
-        "Edit **Rotation**, **Start Wk**, or **End Wk**; use the ➕ row button to add blocks "
-        "or select rows and press **Delete** to remove them. "
-        "Changes take effect when you click **Build Schedule** below."
+        "Each row is one rotation block for an external rotator. "
+        "Edit **Rotation**, **Start Week**, or **End Week** inline. "
+        "Use the **＋** icon below the table to add a block; "
+        "select a row and press **Delete** to remove it. "
+        "Click **Build Schedule** below to apply changes."
     )
 
     col_reset, col_info = st.columns([1, 3])
@@ -156,9 +161,8 @@ with st.expander("📋 Rotator Pre-Schedule", expanded=True):
         if st.button("↺ Reset to auto-generated", key="reset_rotators"):
             _pre = schedule_rotators(rotator_res_list, st.session_state.academic_year)
             st.session_state.rotator_assignments = _assignments_to_df(_pre, res_map)
+            st.session_state.pop("rotator_editor", None)  # clear widget state so editor reloads fresh data
             st.rerun()
-
-    _REQUIRED_COLS = {"Resident", "Program", "Rotation", "Start Week", "End Week"}
 
     edited_df = st.data_editor(
         st.session_state.rotator_assignments,
@@ -187,20 +191,20 @@ with st.expander("📋 Rotator Pre-Schedule", expanded=True):
         key="rotator_editor",
     )
 
-    # Only update session state when data_editor returns the expected columns.
-    # Some Streamlit/environment combos return a broken df on first render.
-    if _REQUIRED_COLS <= set(edited_df.columns):
-        st.session_state.rotator_assignments = edited_df
-
+    # Don't write edited_df back to session state — the data_editor widget preserves
+    # its own edits via key="rotator_editor". Session state is only the initial data
+    # source; edits live in widget state and are read directly from edited_df at build time.
+    # Fall back to session state on first render when Streamlit may return an empty df.
     try:
-        _disp = st.session_state.rotator_assignments
+        _disp = edited_df if not edited_df.empty else st.session_state.rotator_assignments
         valid_rows = _disp.dropna(subset=["Resident", "Rotation"])
         st.caption(
-            f"{len(valid_rows)} block(s) across "
-            f"{valid_rows['Resident'].nunique()} rotator(s)."
+            f"**{len(valid_rows)}** block(s) across "
+            f"**{valid_rows['Resident'].nunique()}** rotator(s) — edits apply on Build."
         )
     except Exception:
-        st.caption(f"{len(st.session_state.rotator_assignments)} block(s) defined.")
+        n = len(st.session_state.rotator_assignments)
+        st.caption(f"**{n}** block(s) defined.")
 
 # ---------------------------------------------------------------------------
 # Build button
@@ -214,7 +218,10 @@ with col_btn:
 if build_clicked:
     with st.spinner(f"Running {method.upper()} solver…"):
         # Use the (possibly edited) rotator pre-schedule from the table above
-        pre_assigned = _df_to_assignments(st.session_state.rotator_assignments, rotator_name_to_id)
+        # edited_df comes from the data_editor widget above (widget state preserved across reruns).
+        # Fall back to session state if edited_df is somehow empty on this render.
+        _build_df = edited_df if not edited_df.empty else st.session_state.rotator_assignments
+        pre_assigned = _df_to_assignments(_build_df, rotator_name_to_id)
 
         result = run_solver(
             residents=st.session_state.residents,
