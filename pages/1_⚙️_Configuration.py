@@ -11,7 +11,7 @@ from core.models import (
 )
 from core.defaults import (
     default_academic_year, default_rotations,
-    default_rotator_programs, default_residents,
+    default_rotator_programs, default_residents, default_all_residents,
 )
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
@@ -19,7 +19,7 @@ st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide"
 # Ensure session state is initialised (in case user lands here directly)
 if "rotations" not in st.session_state:
     st.session_state.rotations          = default_rotations()
-    st.session_state.residents          = default_residents()
+    st.session_state.residents          = default_all_residents()  # IM residents + rotators
     st.session_state.rotator_programs   = default_rotator_programs()
     st.session_state.academic_year      = default_academic_year()
     st.session_state.schedule           = None

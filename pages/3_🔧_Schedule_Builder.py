@@ -72,6 +72,14 @@ if "rotations" not in st.session_state:
     st.session_state.feasibility      = None
     st.session_state.solve_result     = None
 
+# Ensure rotator residents are present — Config page previously used default_residents()
+# (IM only) so navigating Config → Builder left rotator_res_list empty.
+_rotators_in_state = [r for r in st.session_state.residents if r.resident_type == "rotator"]
+if not _rotators_in_state:
+    from core.defaults import default_rotator_residents as _drr
+    _rotators_in_state = _drr()
+    st.session_state.residents = st.session_state.residents + _rotators_in_state
+
 # Lookup maps used throughout this page
 res_map            = {r.resident_id: r for r in st.session_state.residents}
 rotator_res_list   = [r for r in st.session_state.residents if r.resident_type == "rotator"]
