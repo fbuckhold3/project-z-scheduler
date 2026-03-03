@@ -344,60 +344,125 @@ with tab_resident:
 # WEEKLY COUNTS
 # ===========================================================================
 with tab_weekly:
-    st.subheader("Weekly Rotation Headcounts")
-    st.caption("How many residents are on each rotation per week.")
+    st.subheader("📋 Staffing Report")
+    st.caption(
+        "Week-by-week headcounts vs. capacity targets. "
+        "🟢 At/above target · 🟡 Below target · 🔴 Zero (no coverage this week)."
+    )
 
-    active_weeks = ay.all_weeks()
+    # ── Build week × rotation counts (all 48 weeks) ───────────────────────
+    all_w = ay.all_weeks()
     weekly_data = []
-    for w in active_weeks:
+    for w in all_w:
         row = {"Week": w}
         week_assigns = schedule.get_week_assignments(w)
         for rot in rotations:
             row[rot.abbrev] = sum(1 for a in week_assigns if a.rotation_id == rot.rotation_id)
         weekly_data.append(row)
-
     df_wk = pd.DataFrame(weekly_data).set_index("Week")
 
-    # Stacked bar chart
+    # ── Stacked bar — full 48 weeks ───────────────────────────────────────
     fig_wk = go.Figure()
     for rot in rotations:
         if rot.abbrev in df_wk.columns and df_wk[rot.abbrev].sum() > 0:
             fig_wk.add_trace(go.Bar(
-                name=rot.abbrev,
-                x=df_wk.index,
-                y=df_wk[rot.abbrev],
+                name=rot.abbrev, x=df_wk.index, y=df_wk[rot.abbrev],
                 marker_color=rot.color,
             ))
-
     fig_wk.update_layout(
         barmode="stack",
         title="Residents per Rotation per Week",
-        height=420,
-        plot_bgcolor="white",
-        legend=dict(orientation="h", y=1.08),
-        xaxis_title="Week",
+        height=400, plot_bgcolor="white",
+        legend=dict(orientation="h", y=1.1),
+        xaxis=dict(title="Week", tickmode="linear", dtick=4),
         yaxis_title="# Residents",
     )
     st.plotly_chart(fig_wk, use_container_width=True)
 
-    # Also show capacity compliance — how close are we to targets?
-    st.markdown("**Capacity Compliance**")
-    compliance_rows = []
-    for rot in rotations:
-        if not rot.active or rot.senior_capacity + rot.intern_capacity == 0:
-            continue
-        target = rot.senior_capacity + rot.intern_capacity
-        actuals = df_wk.get(rot.abbrev, pd.Series(dtype=int)).values
-        actuals = actuals[actuals > 0]
-        if len(actuals) == 0:
-            continue
-        compliance_rows.append({
-            "Rotation":   rot.name,
-            "Target/wk":  target,
-            "Avg actual": f"{actuals.mean():.1f}",
-            "Min actual": int(actuals.min()),
-            "Max actual": int(actuals.max()),
-            "Under-staffed wks": int((actuals < target).sum()),
-            "Over-staffed wks":  int((actuals > target).sum()),
+    st.markdown("---")
+
+    # ── Rotations with fixed capacity targets ─────────────────────────────
+    tracked_rots = [
+        r for r in rotations
+        if r.active
+        and r.rotation_id not in {"OP", "Clinic", "Diamond"}
+        and (r.senior_capacity + r.intern_capacity) > 0
+    ]
+    targets = {r.abbrev: r.senior_capacity + r.intern_capacity for r in tracked_rots}
+
+    df_status = df_wk[[r.abbrev for r in tracked_rots]].copy()
+
+    # Column headers include the target so the table is self-contained
+    col_rename = {r.abbrev: f"{r.abbrev} (cap {targets[r.abbrev]})" for r in tracked_rots}
+    df_display = df_status.rename(columns=col_rename)
+    abbrev_list = [r.abbrev for r in tracked_rots]
+
+    def _cell_style(df):
+        """Return a same-shape DataFrame of CSS styles, one per cell."""
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+        for col, abbrev in zip(df.columns, abbrev_list):
+            t = targets[abbrev]
+            for w in df.index:
+                v = int(df.loc[w, col])
+                if v == 0 and t > 0:
+                    styles.loc[w, col] = "background-color:#FEE2E2;color:#991B1B"
+                elif v < t:
+                    styles.loc[w, col] = "background-color:#FEF9C3;color:#854D0E"
+                else:
+                    styles.loc[w, col] = "background-color:#DCFCE7;color:#166534"
+        return styles
+
+    # Problem-week filter toggle
+    show_all = st.toggle("Show all 48 weeks", value=False,
+                         help="Off = problem weeks only; On = full year")
+    problem_wks = [
+        w for w in all_w
+        if any(int(df_status.loc[w, r.abbrev]) < targets[r.abbrev] for r in tracked_rots)
+    ]
+
+    display_idx = all_w if show_all else problem_wks
+    if not display_idx:
+        st.success("✅ All rotations fully staffed every week!")
+    else:
+        if not show_all:
+            st.warning(f"⚠️ **{len(problem_wks)} week(s)** with at least one understaffed rotation.")
+        st.dataframe(
+            df_display.loc[display_idx].style.apply(_cell_style, axis=None),
+            use_container_width=True,
+            height=min(600, 40 + 35 * len(display_idx)),
+        )
+
+    st.markdown("---")
+
+    # ── Compliance summary per rotation ───────────────────────────────────
+    st.markdown("**Compliance Summary**")
+    comp_rows = []
+    for rot in tracked_rots:
+        t    = targets[rot.abbrev]
+        vals = df_wk[rot.abbrev].values
+        comp_rows.append({
+            "Rotation":         rot.name,
+            "Target / wk":      t,
+            "Avg actual":       f"{vals.mean():.1f}",
+            "Wks at target":    int((vals >= t).sum()),
+            "Wks under":        int((vals < t).sum()),
+            "Wks empty (0)":    int((vals == 0).sum()),
         })
-    st.dataframe(pd.DataFrame(compliance_rows), use_container_width=True, hide_index=True)
+
+    df_comp = pd.DataFrame(comp_rows)
+
+    def _comp_style(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+        for i in df.index:
+            if df.loc[i, "Wks empty (0)"] > 0:
+                styles.loc[i, "Wks empty (0)"] = "background-color:#FEE2E2;color:#991B1B"
+            if df.loc[i, "Wks under"] > 0:
+                styles.loc[i, "Wks under"] = "background-color:#FEF9C3;color:#854D0E"
+            if df.loc[i, "Wks at target"] == len(all_w):
+                styles.loc[i, "Wks at target"] = "background-color:#DCFCE7;color:#166534"
+        return styles
+
+    st.dataframe(
+        df_comp.style.apply(_comp_style, axis=None),
+        use_container_width=True, hide_index=True,
+    )

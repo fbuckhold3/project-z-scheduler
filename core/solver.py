@@ -418,24 +418,14 @@ class GreedySolver:
         if not valid_windows:
             return
 
-        # Try to space NF blocks ~every 12 weeks; pick windows deterministically
-        # by stepping through the year
-        step = 12
+        # Select non-overlapping 2-week windows covering the ENTIRE year.
+        # step=2 ensures every week has NF coverage; the per-resident eligibility
+        # checks below handle gaps and IP-adjacency for each individual resident.
+        step = 2
         selected_windows: list[tuple[int, int]] = []
         last_selected = -step
         for (w1, w2) in valid_windows:
             if w1 >= last_selected + step:
-                # Avoid placing NF right after an ABABA A-week
-                prev_w = w1 - 1
-                next_w = w2 + 1
-                prev_is_ip = any(
-                    self.grid[prev_w].get(r.resident_id) in self.ip_ids
-                    for r in seniors[:4]
-                ) if prev_w in self.grid else False
-                next_is_ip = any(
-                    self.grid[next_w].get(r.resident_id) in self.ip_ids
-                    for r in seniors[:4]
-                ) if next_w in self.grid else False
                 selected_windows.append((w1, w2))
                 last_selected = w1
 
@@ -456,7 +446,7 @@ class GreedySolver:
                 1 for w in active_weeks
                 if self.grid[w].get(r.resident_id) == "NF"
             ))
-            chosen_s = eligible_s[:senior_cap + 1]  # +1 for coverage (5 assigned → 4 slots)
+            chosen_s = eligible_s[:senior_cap]  # senior_cap already reflects full team size
 
             for res in chosen_s:
                 for w in (w1, w2):
@@ -478,7 +468,7 @@ class GreedySolver:
                 1 for w in active_weeks
                 if self.grid[w].get(r.resident_id) == "NF"
             ))
-            chosen_i = eligible_i[:intern_cap + 1]  # +1 for coverage
+            chosen_i = eligible_i[:intern_cap]  # intern_cap already reflects full team size
             for res in chosen_i:
                 for w in (w1, w2):
                     self.grid[w][res.resident_id] = "NF"
