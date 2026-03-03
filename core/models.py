@@ -156,20 +156,29 @@ class AcademicYear:
     label: str = "2025-2026"
     total_weeks: int = 48
     start_date: str = "2025-07-07"          # First Monday of the academic year
+    blackout_weeks: list = field(default_factory=list)  # e.g. [1, 25, 26] — vacation/ramp
 
     def all_weeks(self) -> list:
+        """All 48 calendar weeks, including blackouts (used for grid init / display)."""
         return list(range(1, self.total_weeks + 1))
+
+    def active_weeks(self) -> list:
+        """Calendar weeks that are NOT blackout — only these receive scheduling."""
+        bk = set(self.blackout_weeks)
+        return [w for w in range(1, self.total_weeks + 1) if w not in bk]
 
     def to_dict(self) -> dict:
         return {
             "label": self.label,
             "total_weeks": self.total_weeks,
             "start_date": self.start_date,
+            "blackout_weeks": list(self.blackout_weeks),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "AcademicYear":
-        d = {k: v for k, v in d.items() if k in {"label", "total_weeks", "start_date"}}
+        allowed = {"label", "total_weeks", "start_date", "blackout_weeks"}
+        d = {k: v for k, v in d.items() if k in allowed}
         return cls(**d)
 
 

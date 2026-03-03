@@ -41,6 +41,9 @@ color_map: dict[str, str] = {r.rotation_id: r.color for r in rotations}
 color_map["VACATION"] = "#374151"
 color_map["OP"]       = color_map.get("OP", "#86EFAC")
 
+# Blackout weeks are vacation — build a lookup set for display
+blackout_weeks: set[int] = set(ay.blackout_weeks)
+
 # ---------------------------------------------------------------------------
 # Filters
 # ---------------------------------------------------------------------------
@@ -103,14 +106,18 @@ with tab_grid:
         row_text  = []
         row_color = []
         for w in weeks_shown:
-            a = schedule.get_resident_week(res.resident_id, w)
-            if a:
-                rot = rot_map.get(a.rotation_id)
-                row_text.append(rot.abbrev if rot else a.rotation_id)
-                row_color.append(rot_id_to_num.get(a.rotation_id, len(rot_ids_ordered) - 1))
+            if w in blackout_weeks and res.resident_type != "rotator":
+                row_text.append("Vac")
+                row_color.append(rot_id_to_num.get("VACATION", len(rot_ids_ordered) - 1))
             else:
-                row_text.append("")
-                row_color.append(len(rot_ids_ordered) - 1)
+                a = schedule.get_resident_week(res.resident_id, w)
+                if a:
+                    rot = rot_map.get(a.rotation_id)
+                    row_text.append(rot.abbrev if rot else a.rotation_id)
+                    row_color.append(rot_id_to_num.get(a.rotation_id, len(rot_ids_ordered) - 1))
+                else:
+                    row_text.append("")
+                    row_color.append(len(rot_ids_ordered) - 1)
         z_text.append(row_text)
         z_color.append(row_color)
 
@@ -265,6 +272,10 @@ with tab_resident:
     # Build rotation sequence
     seq = []
     for w in ay.all_weeks():
+        # Show blackout weeks as Vacation for non-rotators
+        if w in blackout_weeks and res.resident_type != "rotator":
+            seq.append({"Week": w, "Rotation": "Vacation", "Abbrev": "Vac", "Color": "#374151"})
+            continue
         a = schedule.get_resident_week(res.resident_id, w)
         if a:
             rot = rot_map.get(a.rotation_id)
@@ -326,7 +337,7 @@ with tab_resident:
     st.plotly_chart(fig_res, use_container_width=True)
 
     # Summary table for this resident
-    rotation_counts = df_seq[df_seq["Rotation"] != "VACATION"]["Rotation"].value_counts().reset_index()
+    rotation_counts = df_seq[~df_seq["Rotation"].isin(["VACATION", "Vacation", "Unassigned"])]["Rotation"].value_counts().reset_index()
     rotation_counts.columns = ["Rotation", "Weeks"]
     ip_rots = {r.rotation_id for r in rotations if r.rot_type.value == "Inpatient"}
     ip_weeks = df_seq[df_seq["Abbrev"].isin([rot_map.get(rid, type("R", (), {"abbrev": rid})).abbrev

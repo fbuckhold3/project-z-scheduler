@@ -63,6 +63,27 @@ def _level_ok(resident: Resident, rotation: Rotation) -> bool:
     return lvl in rotation.eligible_levels
 
 
+def _contiguous_runs(weeks: list[int]) -> list[list[int]]:
+    """
+    Split a sorted list of week numbers into sub-lists of calendar-consecutive weeks.
+    Any gap ≥ 2 (e.g. caused by blackout weeks) starts a new run.
+
+    Example: [2,3,4,...,24, 27,28,...,48] → [[2..24], [27..48]]
+    """
+    if not weeks:
+        return []
+    runs: list[list[int]] = []
+    current: list[int] = [weeks[0]]
+    for w in weeks[1:]:
+        if w == current[-1] + 1:
+            current.append(w)
+        else:
+            runs.append(current)
+            current = [w]
+    runs.append(current)
+    return runs
+
+
 # ---------------------------------------------------------------------------
 # Greedy Solver
 # ---------------------------------------------------------------------------
@@ -116,7 +137,10 @@ class GreedySolver:
         """
         t0 = time.time()
 
-        active_weeks = self.ay.all_weeks()
+        # Active weeks exclude blackout/vacation weeks (e.g. July 4 ramp, winter break).
+        # The grid is still initialised for ALL 48 calendar weeks so that
+        # adjacency checks across a blackout boundary work correctly.
+        active_weeks = self.ay.active_weeks()
 
         # Step 0: inject pre-assigned rotator blocks
         if pre_assigned:
@@ -218,8 +242,16 @@ class GreedySolver:
         if not active_weeks:
             return
 
-        # Group active weeks into 5-week chunks
-        cycles = [active_weeks[i:i+5] for i in range(0, len(active_weeks), 5)]
+        # Group active weeks into 5-week ABABA chunks, but NEVER let a chunk
+        # span a calendar gap (blackout weeks).  Split active_weeks into
+        # contiguous calendar runs first, then slice each run into 5-week cycles.
+        # This prevents the holiday gap (e.g. weeks 25-26) from causing two
+        # consecutive A-weeks at the boundary of adjacent cycles.
+        runs = _contiguous_runs(active_weeks)
+        cycles: list[list[int]] = []
+        for run in runs:
+            for i in range(0, len(run), 5):
+                cycles.append(run[i:i + 5])
 
         # For MICU senior slots: pick 4 seniors per A-week (weeks 0,2,4 of each cycle)
         # For MICU intern slots: pick 2 interns per A-week
@@ -687,7 +719,7 @@ class GreedySolver:
         """Check hard constraint violations in the generated schedule."""
         violations = 0
         details = []
-        active = self.ay.all_weeks()
+        active = self.ay.active_weeks()  # skip blackout weeks in constraint checks
 
         for res in self.residents:
             # Rotators follow their own external schedule; skip IM constraint checks

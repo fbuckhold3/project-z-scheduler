@@ -15,11 +15,18 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 def default_academic_year() -> AcademicYear:
-    """48-week academic year."""
+    """
+    48-week academic year with blackout (vacation) weeks.
+
+    Blackout weeks:
+      • Week  1 — July 4 ramp-up / holiday; no regular scheduling
+      • Weeks 25-26 — Dec 23 – Jan 2 winter break
+    """
     return AcademicYear(
         label="2025-2026",
         total_weeks=48,
         start_date="2025-07-07",
+        blackout_weeks=[1, 25, 26],
     )
 
 
@@ -313,15 +320,36 @@ def default_rotator_residents() -> list[Resident]:
 # Rotator pre-scheduling
 # ---------------------------------------------------------------------------
 
-def _find_block(start: int, n: int, max_w: int) -> tuple[int, int] | None:
+def _find_block(
+    start: int,
+    n: int,
+    max_w: int,
+    blackout: set | None = None,
+) -> tuple[int, int] | None:
     """
-    Find the first window of n consecutive weeks starting at or after 'start'.
-    Returns (first_week, last_week) or None if it would exceed max_w.
+    Find the first window of n calendar-consecutive weeks starting at or after
+    'start' such that no week in the window is a blackout week.
+
+    If a proposed window overlaps a blackout week, the cursor is advanced past
+    that blackout and a new candidate window is tried.
+
+    Returns (first_week, last_week) or None if the window would exceed max_w.
     """
+    blackout = blackout or set()
     w = start
-    if w + n - 1 <= max_w:
-        return (w, w + n - 1)
-    return None
+    while True:
+        # Advance start past any leading blackout week
+        while w in blackout:
+            w += 1
+        block_end = w + n - 1
+        if block_end > max_w:
+            return None
+        # Check for blackout weeks inside the proposed window
+        conflict = next((bw for bw in sorted(blackout) if w <= bw <= block_end), None)
+        if conflict is None:
+            return (w, block_end)
+        # Skip past the conflicting blackout and retry
+        w = conflict + 1
 
 
 def schedule_rotators(
@@ -341,9 +369,13 @@ def schedule_rotators(
     Multiple programs CAN overlap at the same rotation simultaneously
     (they fill different intern slots).
 
+    Blackout weeks (e.g. July 4 ramp, winter break) are never included in a
+    rotator block — the cursor skips past them automatically.
+
     Returns a list of Assignment objects ready to be injected into the solver.
     """
-    max_w = academic_year.total_weeks
+    max_w    = academic_year.total_weeks
+    blackout = set(academic_year.blackout_weeks)
     assignments: list[Assignment] = []
 
     def _rotators_by_prefix(prefix: str) -> list[Resident]:
@@ -357,13 +389,14 @@ def schedule_rotators(
         Schedule each rotator through their rotation_sequence.
         rot_cursors: independent per-rotation cursor for this program.
         Each rotator's blocks are strictly sequential (no self-overlap).
+        Blackout weeks are skipped by _find_block so no block straddles a vacation.
         """
         rot_cursors: dict[str, int] = {r: start_w for r in rotation_sequence}
         for res in rotators:
             earliest = start_w
             for rot_id in rotation_sequence:
                 cursor = max(rot_cursors.get(rot_id, start_w), earliest)
-                block = _find_block(cursor, block_weeks, cutoff)
+                block = _find_block(cursor, block_weeks, cutoff, blackout=blackout)
                 if block:
                     assignments.append(Assignment(
                         resident_id=res.resident_id,
