@@ -399,36 +399,47 @@ class GreedySolver:
                         intern_ababa_count[res.resident_id] += 1
                         cycle_in.add(res.resident_id)
 
-        # B-weeks (indices 1, 3 of each 5-week cycle): fill MICU only.
-        # These are the "off" weeks of the A-cohort; a fresh B-cohort staffs MICU
-        # so that MICU has coverage every week.  The ababa_count tracking ensures
-        # residents who just did an A-week are ranked lower and a different set is chosen.
-        if micu:
-            for cycle in cycles:
-                for bi in [1, 3]:
-                    if bi >= len(cycle):
-                        break
-                    w = cycle[bi]
-                    _ababa_excl = {"MICU", "Bronze", "Cards"}
-                    if micu_cap > 0:
-                        available = [
-                            r for r in seniors
-                            if self.grid[w].get(r.resident_id) is None
-                            and _level_ok(r, micu)
-                            and not self._ip_would_violate(r.resident_id, w)
-                            # No consecutive MICU/Bronze/Cards weeks (check both neighbours;
-                            # A-weeks are already in the grid when B-weeks are filled)
-                            and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
-                            and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
-                            # No IP immediately adjacent to NF block
-                            and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
-                            and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
-                        ]
-                        available.sort(key=lambda r: senior_ababa_count[r.resident_id])
-                        for res in available[:micu_cap]:
-                            self.grid[w][res.resident_id] = "MICU"
-                            self.weekly_slots[w]["MICU"].append(res.resident_id)
-                            senior_ababa_count[res.resident_id] += 1
+        # B-weeks (indices 1, 3 of each 5-week cycle): fill MICU and Cards.
+        #
+        # The ABABA pattern means each *service* needs residents EVERY week:
+        #   A-cohort covers the service on weeks 1, 3, 5 of each cycle.
+        #   B-cohort covers the service on weeks 2, 4 of each cycle.
+        # The A-weeks loop above populated A-cohort slots for MICU, Bronze, and Cards.
+        # Here we populate B-cohort slots for MICU and Cards (both need weekly coverage).
+        # Bronze is intentionally 3/5 weeks — its service model only requires it on A-weeks.
+        #
+        # The ababa_count tracking ensures residents who just did an A-week are ranked
+        # lower, so a genuinely different set of residents covers each B-week.
+        _ababa_excl = {"MICU", "Bronze", "Cards"}
+        for cycle in cycles:
+            for bi in [1, 3]:
+                if bi >= len(cycle):
+                    break
+                w = cycle[bi]
+
+                # --- MICU seniors (B-cohort) ---
+                if micu and micu_cap > 0:
+                    available = [
+                        r for r in seniors
+                        if self.grid[w].get(r.resident_id) is None
+                        and _level_ok(r, micu)
+                        and not self._ip_would_violate(r.resident_id, w)
+                        # No consecutive ABABA-service weeks (check both neighbours;
+                        # A-weeks are already in the grid when B-weeks are filled)
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
+                        and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
+                        # No IP immediately adjacent to NF block
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
+                        and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
+                    ]
+                    available.sort(key=lambda r: senior_ababa_count[r.resident_id])
+                    for res in available[:micu_cap]:
+                        self.grid[w][res.resident_id] = "MICU"
+                        self.weekly_slots[w]["MICU"].append(res.resident_id)
+                        senior_ababa_count[res.resident_id] += 1
+
+                # --- MICU interns (B-cohort) ---
+                if micu:
                     intern_cap = micu.intern_capacity
                     if intern_cap > 0:
                         avail_i = [
@@ -436,10 +447,8 @@ class GreedySolver:
                             if self.grid[w].get(r.resident_id) is None
                             and _level_ok(r, micu)
                             and not self._ip_would_violate(r.resident_id, w)
-                            # No consecutive MICU/Bronze/Cards weeks
                             and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
                             and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
-                            # No IP immediately adjacent to NF block
                             and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                             and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
                         ]
@@ -448,6 +457,42 @@ class GreedySolver:
                             self.grid[w][res.resident_id] = "MICU"
                             self.weekly_slots[w]["MICU"].append(res.resident_id)
                             intern_ababa_count[res.resident_id] += 1
+
+                # --- Cards seniors (B-cohort) — service needs coverage every week ---
+                if cards and cards.active and cards_cap > 0:
+                    available = [
+                        r for r in seniors
+                        if self.grid[w].get(r.resident_id) is None
+                        and _level_ok(r, cards)
+                        and not self._ip_would_violate(r.resident_id, w)
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
+                        and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
+                        and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
+                    ]
+                    available.sort(key=lambda r: senior_ababa_count[r.resident_id])
+                    for res in available[:cards_cap]:
+                        self.grid[w][res.resident_id] = "Cards"
+                        self.weekly_slots[w]["Cards"].append(res.resident_id)
+                        senior_ababa_count[res.resident_id] += 1
+
+                # --- Cards interns (B-cohort) ---
+                if cards and cards.active and cards.intern_capacity > 0:
+                    avail_i = [
+                        r for r in interns
+                        if self.grid[w].get(r.resident_id) is None
+                        and _level_ok(r, cards)
+                        and not self._ip_would_violate(r.resident_id, w)
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
+                        and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
+                        and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
+                    ]
+                    avail_i.sort(key=lambda r: intern_ababa_count[r.resident_id])
+                    for res in avail_i[:cards.intern_capacity]:
+                        self.grid[w][res.resident_id] = "Cards"
+                        self.weekly_slots[w]["Cards"].append(res.resident_id)
+                        intern_ababa_count[res.resident_id] += 1
 
     # ------------------------------------------------------------------
     # NF assignment
