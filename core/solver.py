@@ -216,7 +216,8 @@ class GreedySolver:
         """
         micu = self.rot_map.get("MICU")
         bronze = self.rot_map.get("Bronze")
-        if not micu and not bronze:
+        cards = self.rot_map.get("Cards")
+        if not micu and not bronze and not cards:
             return
 
         # Rotators have pre-injected assignments; exclude from ABABA greedy fill
@@ -232,7 +233,8 @@ class GreedySolver:
 
         micu_cap   = micu.senior_capacity   if micu   else 0
         bronze_cap = bronze.senior_capacity if bronze else 0
-        total_ababa_senior_slots = micu_cap + bronze_cap  # per week = 6
+        cards_cap  = cards.senior_capacity  if (cards and cards.active) else 0
+        total_ababa_senior_slots = micu_cap + bronze_cap + cards_cap  # per week
 
         # Build 5-week cycles across the year
         # Weeks cycle: A B A B A (5 weeks), repeating
@@ -334,8 +336,8 @@ class GreedySolver:
                         if self.grid[w].get(r.resident_id) is None
                         and _level_ok(r, bronze)
                         and not self._ip_would_violate(r.resident_id, w)
-                        # No consecutive MICU/Bronze weeks
-                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
+                        # No consecutive MICU/Bronze/Cards weeks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze", "Cards"}
                         # No IP immediately adjacent to NF block
                         and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                         and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
@@ -351,6 +353,52 @@ class GreedySolver:
                         senior_ababa_count[res.resident_id] += 1
                         cycle_sr.add(res.resident_id)
 
+                # --- Cards seniors (A-weeks only, soft fill) ---
+                if cards and cards.active and cards_cap > 0:
+                    available = [
+                        r for r in seniors
+                        if self.grid[w].get(r.resident_id) is None
+                        and _level_ok(r, cards)
+                        and not self._ip_would_violate(r.resident_id, w)
+                        # No consecutive MICU/Bronze/Cards weeks
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze", "Cards"}
+                        # No IP immediately adjacent to NF block
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
+                        and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
+                    ]
+                    available.sort(key=lambda r: (
+                        0 if r.resident_id in cycle_sr else 1,
+                        senior_ababa_count[r.resident_id],
+                    ))
+                    chosen = available[:cards_cap]
+                    for res in chosen:
+                        self.grid[w][res.resident_id] = "Cards"
+                        self.weekly_slots[w]["Cards"].append(res.resident_id)
+                        senior_ababa_count[res.resident_id] += 1
+                        cycle_sr.add(res.resident_id)
+
+                # --- Cards interns (A-weeks only, soft fill) ---
+                if cards and cards.active and cards.intern_capacity > 0:
+                    avail_i = [
+                        r for r in interns
+                        if self.grid[w].get(r.resident_id) is None
+                        and _level_ok(r, cards)
+                        and not self._ip_would_violate(r.resident_id, w)
+                        and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze", "Cards"}
+                        and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
+                        and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
+                    ]
+                    avail_i.sort(key=lambda r: (
+                        0 if r.resident_id in cycle_in else 1,
+                        intern_ababa_count[r.resident_id],
+                    ))
+                    chosen_i = avail_i[:cards.intern_capacity]
+                    for res in chosen_i:
+                        self.grid[w][res.resident_id] = "Cards"
+                        self.weekly_slots[w]["Cards"].append(res.resident_id)
+                        intern_ababa_count[res.resident_id] += 1
+                        cycle_in.add(res.resident_id)
+
         # B-weeks (indices 1, 3 of each 5-week cycle): fill MICU only.
         # These are the "off" weeks of the A-cohort; a fresh B-cohort staffs MICU
         # so that MICU has coverage every week.  The ababa_count tracking ensures
@@ -361,16 +409,17 @@ class GreedySolver:
                     if bi >= len(cycle):
                         break
                     w = cycle[bi]
+                    _ababa_excl = {"MICU", "Bronze", "Cards"}
                     if micu_cap > 0:
                         available = [
                             r for r in seniors
                             if self.grid[w].get(r.resident_id) is None
                             and _level_ok(r, micu)
                             and not self._ip_would_violate(r.resident_id, w)
-                            # No consecutive MICU/Bronze weeks (check both neighbours;
+                            # No consecutive MICU/Bronze/Cards weeks (check both neighbours;
                             # A-weeks are already in the grid when B-weeks are filled)
-                            and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
-                            and self.grid.get(w + 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
+                            and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
+                            and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
                             # No IP immediately adjacent to NF block
                             and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                             and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
@@ -387,9 +436,9 @@ class GreedySolver:
                             if self.grid[w].get(r.resident_id) is None
                             and _level_ok(r, micu)
                             and not self._ip_would_violate(r.resident_id, w)
-                            # No consecutive MICU/Bronze weeks
-                            and self.grid.get(w - 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
-                            and self.grid.get(w + 1, {}).get(r.resident_id) not in {"MICU", "Bronze"}
+                            # No consecutive MICU/Bronze/Cards weeks
+                            and self.grid.get(w - 1, {}).get(r.resident_id) not in _ababa_excl
+                            and self.grid.get(w + 1, {}).get(r.resident_id) not in _ababa_excl
                             # No IP immediately adjacent to NF block
                             and self.grid.get(w - 1, {}).get(r.resident_id) != "NF"
                             and self.grid.get(w + 1, {}).get(r.resident_id) != "NF"
@@ -513,22 +562,45 @@ class GreedySolver:
 
     def _assign_clinic(self, active_weeks: list[int]):
         """
-        Assign clinic using a fixed position within each 6-week cycle.
+        Assign clinic using six fixed groups with sizes [14, 14, 13, 14, 14, 13].
 
-        Resident at index i gets position (i % 6) in every cycle.  Because the
-        position is the same in every cycle, clinic always falls exactly 6 weeks
-        apart — no more, no less — regardless of how other rotations are placed.
+        Residents are assigned to groups in roster order:
+          Group 0 → 14 residents → clinic on week index 0 of each 6-week cycle
+          Group 1 → 14 residents → clinic on week index 1
+          Group 2 → 13 residents → clinic on week index 2
+          Group 3 → 14 residents → clinic on week index 3
+          Group 4 → 14 residents → clinic on week index 4
+          Group 5 → 13 residents → clinic on week index 5
+
+        Any extra residents beyond the group total are placed in the last group.
 
         Runs FIRST (before NF / ABABA / main IP) so clinic is never squeezed out.
 
         If the preferred week is already occupied (e.g. by a rotator pre-assignment),
         we fall back to the nearest free week within the same cycle.
         """
-        cycles = [active_weeks[i:i+6] for i in range(0, len(active_weeks), 6)]
+        # Fixed group sizes as specified: 14-14-13-14-14-13
+        GROUP_SIZES = [14, 14, 13, 14, 14, 13]
+
         non_rotators = [r for r in self.residents if r.resident_type != "rotator"]
 
-        for pos_idx, res in enumerate(non_rotators):
-            base_pos = pos_idx % 6          # fixed clinic position for this resident
+        # Assign each resident to a clinic group in roster order
+        group_of: dict[str, int] = {}
+        idx = 0
+        for g, size in enumerate(GROUP_SIZES):
+            for _ in range(size):
+                if idx < len(non_rotators):
+                    group_of[non_rotators[idx].resident_id] = g
+                    idx += 1
+        # Any overflow residents (when roster > sum(GROUP_SIZES)) go to group 5
+        while idx < len(non_rotators):
+            group_of[non_rotators[idx].resident_id] = len(GROUP_SIZES) - 1
+            idx += 1
+
+        cycles = [active_weeks[i:i+6] for i in range(0, len(active_weeks), 6)]
+
+        for res in non_rotators:
+            base_pos = group_of.get(res.resident_id, 0)
             for cycle in cycles:
                 if not cycle:
                     continue
@@ -591,9 +663,9 @@ class GreedySolver:
         sluh  = self.rot_map.get("SLUH")
         va    = self.rot_map.get("VA")
         gold  = self.rot_map.get("Gold")
-        cards = self.rot_map.get("Cards")
+        # Cards is ABABA — handled in _assign_ababa(), not here
 
-        ip_rots = [r for r in [sluh, va, gold, cards]
+        ip_rots = [r for r in [sluh, va, gold]
                    if r and r.active and r.rot_type == RotationType.IP]
 
         # Prevent direct SLUH↔VA transitions: no back-to-back sibling MK blocks
@@ -812,7 +884,10 @@ class CPSATSolver:
         t0 = time.time()
         model = cp_model.CpModel()
 
-        active_weeks = self.ay.all_weeks()
+        # Use only schedulable (non-blackout) weeks — all_weeks() would create
+        # infeasible constraints because capacity == requirements can't be met
+        # during vacation/ramp weeks when residents are unavailable.
+        active_weeks = self.ay.active_weeks()
         n_weeks = len(active_weeks)
         w_idx = {w: i for i, w in enumerate(active_weeks)}
 
@@ -857,16 +932,13 @@ class CPSATSolver:
                     continue  # handled separately
                 s_vars = [xvar(ri, wi, roti) for ri in seniors_idx if xvar(ri, wi, roti) is not None]
                 i_vars = [xvar(ri, wi, roti) for ri in interns_idx if xvar(ri, wi, roti) is not None]
-                if rot.required:
-                    if s_vars and rot.senior_capacity > 0:
-                        model.add(sum(s_vars) == rot.senior_capacity)
-                    if i_vars and rot.intern_capacity > 0:
-                        model.add(sum(i_vars) == rot.intern_capacity)
-                else:
-                    if s_vars:
-                        model.add(sum(s_vars) <= rot.senior_capacity)
-                    if i_vars:
-                        model.add(sum(i_vars) <= rot.intern_capacity)
+                # Use <= (capacity ceiling) for all rotations — strict == causes INFEASIBLE
+                # when NF, clinic, and IP-window constraints simultaneously apply.
+                # Maximize fill via the objective function instead.
+                if s_vars and rot.senior_capacity > 0:
+                    model.add(sum(s_vars) <= rot.senior_capacity)
+                if i_vars and rot.intern_capacity > 0:
+                    model.add(sum(i_vars) <= rot.intern_capacity)
 
         # ------------------------------------------------------------------
         # C3: Max 3 IP weeks in any 6-week sliding window
@@ -960,19 +1032,21 @@ class CPSATSolver:
                         model.add(sum(week_clinic_vars) <= target + 1)
 
         # ------------------------------------------------------------------
-        # Objective: minimize total soft violations (unassigned optional slots)
+        # Objective: maximize total filled slots across all required rotations.
+        # Since capacity constraints are now <= (not ==), the solver needs an
+        # incentive to fill slots up to capacity.  Weight required rotations
+        # higher than optional ones.
         # ------------------------------------------------------------------
-        cards_roti = rot_idx.get("Cards")
-        penalty_terms = []
-        if cards_roti is not None:
-            for wi in range(n_weeks):
+        fill_terms = []
+        for wi in range(n_weeks):
+            for roti, rot in enumerate(rotations):
+                weight = 2 if rot.required else 1
                 for ri in range(n_res):
-                    v = xvar(ri, wi, cards_roti)
+                    v = xvar(ri, wi, roti)
                     if v is not None:
-                        penalty_terms.append(v)
-        # Maximize optional slots filled (as a soft objective)
-        if penalty_terms:
-            model.maximize(sum(penalty_terms))
+                        fill_terms.append(weight * v)
+        if fill_terms:
+            model.maximize(sum(fill_terms))
 
         # ------------------------------------------------------------------
         # Solve

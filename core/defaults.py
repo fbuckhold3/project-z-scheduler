@@ -152,15 +152,18 @@ def default_rotations() -> list[Rotation]:
             name="Cardiology",
             abbrev="Cards",
             rot_type=RotationType.IP,
-            pattern=RotationPattern.STANDARD,
+            pattern=RotationPattern.ABABA,
             senior_capacity=2,
             intern_capacity=1,
             min_block_weeks=1,
-            max_block_weeks=4,
+            max_block_weeks=1,
             eligible_levels=["senior", "intern"],
             required=False,     # soft constraint — fill when possible
             color="#EC4899",
-            notes="2 seniors + 1 intern. Similar structure to Bronze. Soft fill — preferred but not required.",
+            notes=(
+                "ABABA pattern (same as MICU/Bronze). 2 seniors + 1 intern on A-weeks. "
+                "7-day blocks. Soft fill — preferred but not required."
+            ),
         ),
         Rotation(
             rotation_id="Diamond",
