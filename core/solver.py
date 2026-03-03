@@ -607,40 +607,33 @@ class GreedySolver:
 
     def _assign_clinic(self, active_weeks: list[int]):
         """
-        Assign clinic using six fixed groups with sizes [14, 14, 13, 14, 14, 13].
+        Assign clinic using 6 PGY-balanced groups.
 
-        Residents are assigned to groups in roster order:
-          Group 0 → 14 residents → clinic on week index 0 of each 6-week cycle
-          Group 1 → 14 residents → clinic on week index 1
-          Group 2 → 13 residents → clinic on week index 2
-          Group 3 → 14 residents → clinic on week index 3
-          Group 4 → 14 residents → clinic on week index 4
-          Group 5 → 13 residents → clinic on week index 5
+        Group assignment is round-robin within each PGY level so each group
+        gets roughly equal numbers of PGY3, PGY2, and PGY1 residents.
+        Group g → clinic on week index g of each 6-week cycle.
 
-        Any extra residents beyond the group total are placed in the last group.
+        If a resident already has a Clinic week in a given cycle (pre-assigned
+        from the builder's locked clinic grid), that cycle is skipped — the
+        pre-assignment stands and we never double-assign.
 
         Runs FIRST (before NF / ABABA / main IP) so clinic is never squeezed out.
 
         If the preferred week is already occupied (e.g. by a rotator pre-assignment),
         we fall back to the nearest free week within the same cycle.
         """
-        # Fixed group sizes as specified: 14-14-13-14-14-13
-        GROUP_SIZES = [14, 14, 13, 14, 14, 13]
-
+        N_GROUPS = 6
         non_rotators = [r for r in self.residents if r.resident_type != "rotator"]
 
-        # Assign each resident to a clinic group in roster order
+        # Build PGY-balanced group map: round-robin within each PGY level
         group_of: dict[str, int] = {}
-        idx = 0
-        for g, size in enumerate(GROUP_SIZES):
-            for _ in range(size):
-                if idx < len(non_rotators):
-                    group_of[non_rotators[idx].resident_id] = g
-                    idx += 1
-        # Any overflow residents (when roster > sum(GROUP_SIZES)) go to group 5
-        while idx < len(non_rotators):
-            group_of[non_rotators[idx].resident_id] = len(GROUP_SIZES) - 1
-            idx += 1
+        for pgy in [3, 2, 1]:
+            cohort = sorted(
+                [r for r in non_rotators if r.pgy_year == pgy],
+                key=lambda r: r.resident_id,
+            )
+            for i, res in enumerate(cohort):
+                group_of[res.resident_id] = i % N_GROUPS
 
         cycles = [active_weeks[i:i+6] for i in range(0, len(active_weeks), 6)]
 
@@ -649,6 +642,11 @@ class GreedySolver:
             for cycle in cycles:
                 if not cycle:
                     continue
+
+                # If already has clinic this cycle (pre-assigned), skip — don't double-assign
+                if any(self.grid[w].get(res.resident_id) == "Clinic" for w in cycle):
+                    continue
+
                 pos = min(base_pos, len(cycle) - 1)   # clamp for short last cycle
                 preferred = cycle[pos]
 
